@@ -1,4 +1,3 @@
-
 package com.remixhub.app
 
 import android.app.Activity
