@@ -1,0 +1,9 @@
+
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RemixHub</string>
+    <string name="welcome_title">Create. Remix. Collaborate.</string>
+    <string name="welcome_description">Your music, your creativity, our community.</string>
+    <string name="new_project">New Project</string>
+    <string name="my_projects">My Projects</string>
+</resources>
