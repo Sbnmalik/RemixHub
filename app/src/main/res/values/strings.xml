@@ -1,8 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">RemixHub</string>
+
     <string name="welcome_title">Create. Remix. Collaborate.</string>
     <string name="welcome_description">Your music, your creativity, our community.</string>
+
     <string name="new_project">New Project</string>
     <string name="my_projects">My Projects</string>
+
+    <string name="editor_title">Music Editor</string>
+    <string name="editor_description">Start creating by importing an audio track.</string>
+
+    <string name="track_label">Audio Track</string>
+    <string name="no_track">No audio track selected</string>
+
+    <string name="import_audio">Import Audio</string>
+    <string name="play_audio">Play</string>
+    <string name="pause_audio">Pause</string>
+
+    <string name="status_empty">Import an audio file to begin.</string>
+    <string name="status_loading">Loading audio...</string>
+    <string name="status_ready">Audio ready to play.</string>
+    <string name="status_playing">Playing audio...</string>
+    <string name="status_paused">Playback paused.</string>
+    <string name="status_finished">Playback finished.</string>
+    <string name="status_error">Unable to load this audio file.</string>
 </resources>
