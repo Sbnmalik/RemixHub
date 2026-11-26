@@ -91,7 +91,11 @@ if (project == null) {
         importButton = findViewById(R.id.btnImportAudio)
         recordButton = findViewById(R.id.btnRecord)
         playPauseButton = findViewById(R.id.btnPlayPause)
+        exportButton = findViewById(R.id.btnExportMix)
 
+        exportButton.setOnClickListener {
+                        openExportPicker()
+        }
         originalVolume = findViewById(R.id.seekOriginalVolume)
         recordingVolume = findViewById(R.id.seekRecordingVolume)
 
@@ -278,6 +282,124 @@ try {
 
         return name
     }
+
+private fun openExportPicker() {
+    if (exporting || audioRecorder.isRecording) return
+
+    if (originalUri == null && recordingFile == null) {
+        playbackStatus.text = "No audio available to export."
+        return
+    }
+
+    val projectName = projectStore.getById(projectId)
+        ?.name ?: "RemixHub"
+
+    val safeName = projectName.replace(
+        Regex("[^a-zA-Z0-9_-]"),
+        "_"
+    )
+
+    val intent = Intent(
+        Intent.ACTION_CREATE_DOCUMENT
+    ).apply {
+        addCategory(Intent.CATEGORY_OPENABLE)
+        type = "audio/wav"
+        putExtra(
+            Intent.EXTRA_TITLE,
+            "${safeName}_mix.wav"
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    startActivityForResult(intent, EXPORT_REQUEST_CODE)
+}
+
+private fun exportMix(destinationUri: Uri) {
+    if (exporting || audioRecorder.isRecording) return
+
+    val sourceOriginal = originalUri
+    val sourceRecording = recordingFile
+        ?.takeIf { it.exists() }
+        ?.let(Uri::fromFile)
+
+    if (sourceOriginal == null && sourceRecording == null) {
+        playbackStatus.text = "No audio available to export."
+        return
+    }
+
+    val originalGain = originalVolume.progress / 100f
+    val recordingGain = recordingVolume.progress / 100f
+
+    exporting = true
+    playbackStatus.setText(R.string.status_exporting)
+
+    // Exporting should not compete with preview playback.
+    releasePlayers()
+    updateControls()
+
+    Thread {
+        try {
+            val stream = requireNotNull(
+                contentResolver.openOutputStream(
+                    destinationUri,
+                    "w"
+                )
+            ) {
+                "Unable to open export destination."
+            }
+
+            stream.use {
+                val exporter = WavMixExporter(
+                    applicationContext
+                )
+
+                exporter.export(
+                    originalUri = sourceOriginal,
+                    recordingUri = sourceRecording,
+                    originalVolume = originalGain,
+                    recordingVolume = recordingGain,
+                    destination = it
+                )
+            }
+
+            projectStore.update(
+                projectId,
+                "Mix exported as WAV"
+            ) { it }
+
+            runOnUiThread {
+                if (!isDestroyed) {
+                    exporting = false
+                    preparePlayers()
+                    playbackStatus.setText(
+                        R.string.status_export_success
+                    )
+                    updateControls()
+                }
+            }
+
+        } catch (error: Exception) {
+            android.util.Log.e(
+                "RemixHub",
+                "Audio export failed",
+                error
+            )
+
+            runOnUiThread {
+                if (!isDestroyed) {
+                    exporting = false
+                    preparePlayers()
+
+                    playbackStatus.text =
+                        "Export failed: " +
+                        (error.message ?: "Unknown error")
+
+                    updateControls()
+                }
+            }
+        }
+    }.start()
+}
 
     // MICROPHONE RECORDING
 
