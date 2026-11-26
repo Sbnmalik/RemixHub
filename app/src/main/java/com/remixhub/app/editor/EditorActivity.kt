@@ -1,62 +1,144 @@
 package com.remixhub.app.editor
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.widget.Button
+import android.widget.SeekBar
 import android.widget.TextView
 import com.remixhub.app.R
+import com.remixhub.app.audio.AudioRecorder
+import java.io.File
 
 class EditorActivity : Activity() {
 
     companion object {
         private const val AUDIO_REQUEST_CODE = 1001
+        private const val MIC_PERMISSION_CODE = 1002
         private const val STATE_AUDIO_URI = "audio_uri"
+        private const val STATE_RECORDING_PATH = "recording_path"
     }
 
-    private var mediaPlayer: MediaPlayer? = null
-    private var selectedAudioUri: Uri? = null
-    private var isPrepared = false
+    private lateinit var audioRecorder: AudioRecorder
+
+    private var originalUri: Uri? = null
+    private var recordingFile: File? = null
+
+    private var originalPlayer: MediaPlayer? = null
+    private var recordingPlayer: MediaPlayer? = null
+
+    private var originalReady = false
+    private var recordingReady = false
+    private var isPlaying = false
+    private var isPaused = false
+    private var originalEnded = false
+    private var recordingEnded = false
 
     private lateinit var trackName: TextView
+    private lateinit var recordingName: TextView
     private lateinit var playbackStatus: TextView
+
+    private lateinit var importButton: Button
+    private lateinit var recordButton: Button
     private lateinit var playPauseButton: Button
+
+    private lateinit var originalVolume: SeekBar
+    private lateinit var recordingVolume: SeekBar
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContentView(R.layout.activity_editor)
 
+        audioRecorder = AudioRecorder(applicationContext)
+
         trackName = findViewById(R.id.textTrackName)
+        recordingName = findViewById(R.id.textRecordingName)
         playbackStatus = findViewById(R.id.textPlaybackStatus)
+
+        importButton = findViewById(R.id.btnImportAudio)
+        recordButton = findViewById(R.id.btnRecord)
         playPauseButton = findViewById(R.id.btnPlayPause)
 
-        val importButton =
-            findViewById<Button>(R.id.btnImportAudio)
+        originalVolume = findViewById(R.id.seekOriginalVolume)
+        recordingVolume = findViewById(R.id.seekRecordingVolume)
 
-        val backButton =
-            findViewById<TextView>(R.id.textBack)
-
-        selectedAudioUri = savedInstanceState
+        originalUri = savedInstanceState
             ?.getString(STATE_AUDIO_URI)
             ?.let(Uri::parse)
 
-        backButton.setOnClickListener {
-            finish()
-        }
+        recordingFile = savedInstanceState
+            ?.getString(STATE_RECORDING_PATH)
+            ?.let(::File)
+            ?.takeIf { it.exists() }
+
+        findViewById<TextView>(R.id.textBack)
+            .setOnClickListener {
+                finish()
+            }
 
         importButton.setOnClickListener {
             openAudioPicker()
         }
 
+        recordButton.setOnClickListener {
+            if (audioRecorder.isRecording) {
+                stopRecording()
+            } else {
+                checkMicrophonePermission()
+            }
+        }
+
         playPauseButton.setOnClickListener {
             togglePlayback()
         }
+
+        originalVolume.setOnSeekBarChangeListener(
+            volumeListener { volume ->
+                originalPlayer?.setVolume(volume, volume)
+            }
+        )
+
+        recordingVolume.setOnSeekBarChangeListener(
+            volumeListener { volume ->
+                recordingPlayer?.setVolume(volume, volume)
+            }
+        )
+
+        updateTrackLabels()
+        updateControls()
     }
+
+    private fun volumeListener(
+        onVolumeChanged: (Float) -> Unit
+    ): SeekBar.OnSeekBarChangeListener {
+        return object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(
+                seekBar: SeekBar,
+                progress: Int,
+                fromUser: Boolean
+            ) {
+                if (fromUser) {
+                    onVolumeChanged(progress / 100f)
+                }
+            }
+
+            override fun onStartTrackingTouch(
+                seekBar: SeekBar
+            ) = Unit
+
+            override fun onStopTrackingTouch(
+                seekBar: SeekBar
+            ) = Unit
+        }
+    }
+
+    // AUDIO IMPORT
 
     private fun openAudioPicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -66,10 +148,11 @@ class EditorActivity : Activity() {
             addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         }
 
+        @Suppress("DEPRECATION")
         startActivityForResult(intent, AUDIO_REQUEST_CODE)
     }
 
-    @Deprecated("Uses the native Activity result API for this MVP")
+    @Deprecated("Native Activity result API")
     override fun onActivityResult(
         requestCode: Int,
         resultCode: Int,
@@ -79,9 +162,7 @@ class EditorActivity : Activity() {
 
         if (requestCode != AUDIO_REQUEST_CODE ||
             resultCode != RESULT_OK
-        ) {
-            return
-        }
+        ) return
 
         val uri = data?.data ?: return
 
@@ -91,14 +172,13 @@ class EditorActivity : Activity() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         } catch (_: SecurityException) {
-            // The temporary read grant may still allow
-            // playback for the current session.
+            // The temporary document grant can
+            // still support current-session playback.
         }
 
-        selectedAudioUri = uri
-        trackName.text = getAudioFileName(uri)
-
-        loadAudio(uri)
+        originalUri = uri
+        updateTrackLabels()
+        preparePlayers()
     }
 
     private fun getAudioFileName(uri: Uri): String {
@@ -106,13 +186,8 @@ class EditorActivity : Activity() {
 
         try {
             contentResolver.query(
-                uri,
-                null,
-                null,
-                null,
-                null
+                uri, null, null, null, null
             )?.use { cursor ->
-
                 val index = cursor.getColumnIndex(
                     OpenableColumns.DISPLAY_NAME
                 )
@@ -122,22 +197,156 @@ class EditorActivity : Activity() {
                 }
             }
         } catch (_: Exception) {
-            // Keep the fallback name.
+            // Keep fallback filename.
         }
 
         return name
     }
 
-    private fun loadAudio(uri: Uri) {
-        releasePlayer()
+    // MICROPHONE RECORDING
+
+    private fun checkMicrophonePermission() {
+        if (checkSelfPermission(
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            startRecording()
+        } else {
+            requestPermissions(
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                MIC_PERMISSION_CODE
+            )
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(
+            requestCode,
+            permissions,
+            grantResults
+        )
+
+        if (requestCode != MIC_PERMISSION_CODE) return
+
+        if (grantResults.firstOrNull() ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            startRecording()
+        } else {
+            playbackStatus.setText(
+                R.string.status_permission_denied
+            )
+        }
+    }
+
+    private fun startRecording() {
+        if (audioRecorder.isRecording) return
+
+        releasePlayers()
+
+        try {
+            audioRecorder.start()
+
+            recordButton.setText(R.string.stop_recording)
+            playbackStatus.setText(
+                R.string.status_recording
+            )
+        } catch (_: Exception) {
+            playbackStatus.setText(
+                R.string.status_recording_error
+            )
+        }
+
+        updateControls()
+    }
+
+    private fun stopRecording() {
+        val file = audioRecorder.stop()
+
+        if (file != null) {
+            recordingFile = file
+            playbackStatus.setText(R.string.status_recorded)
+        } else {
+            playbackStatus.setText(
+                R.string.status_recording_error
+            )
+        }
+
+        updateTrackLabels()
+        preparePlayers()
+    }
+
+    // AUDIO PREPARATION
+
+    private fun preparePlayers() {
+        releasePlayers()
+        updateControls()
+
+        if (originalUri == null && recordingFile == null) {
+            playbackStatus.setText(R.string.status_empty)
+            return
+        }
 
         playbackStatus.setText(R.string.status_loading)
 
-        val newPlayer = MediaPlayer()
-        mediaPlayer = newPlayer
+        originalUri?.let { uri ->
+            originalPlayer = createPlayer(
+                configure = { player ->
+                    player.setDataSource(this, uri)
+                },
+                onReady = {
+                    originalReady = true
+                    updateReadyState()
+                },
+                onFinished = {
+                    originalEnded = true
+
+                    // Original audio controls the end
+                    // of a two-track preview.
+                    finishPlayback()
+                }
+            )
+        }
+
+        recordingFile?.let { file ->
+            if (file.exists()) {
+                recordingPlayer = createPlayer(
+                    configure = { player ->
+                        player.setDataSource(
+                            file.absolutePath
+                        )
+                    },
+                    onReady = {
+                        recordingReady = true
+                        updateReadyState()
+                    },
+                    onFinished = {
+                        recordingEnded = true
+
+                        if (originalPlayer == null) {
+                            finishPlayback()
+                        }
+                    }
+                )
+            }
+        }
+
+        updateControls()
+    }
+
+    private fun createPlayer(
+        configure: (MediaPlayer) -> Unit,
+        onReady: () -> Unit,
+        onFinished: () -> Unit
+    ): MediaPlayer? {
+        val player = MediaPlayer()
 
         try {
-            newPlayer.setAudioAttributes(
+            player.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(
@@ -146,111 +355,262 @@ class EditorActivity : Activity() {
                     .build()
             )
 
-            newPlayer.setDataSource(this, uri)
+            configure(player)
 
-            newPlayer.setOnPreparedListener { preparedPlayer ->
-                if (mediaPlayer === preparedPlayer) {
-                    isPrepared = true
-                    playPauseButton.isEnabled = true
-                    playPauseButton.setText(
-                        R.string.play_audio
-                    )
-                    playbackStatus.setText(
-                        R.string.status_ready
-                    )
+            player.setOnPreparedListener {
+                if (!audioRecorder.isRecording) {
+                    onReady()
                 }
             }
 
-            newPlayer.setOnCompletionListener { completedPlayer ->
-                if (mediaPlayer === completedPlayer) {
-                    playPauseButton.setText(
-                        R.string.play_audio
-                    )
-                    playbackStatus.setText(
-                        R.string.status_finished
-                    )
-                }
+            player.setOnCompletionListener {
+                onFinished()
             }
 
-            newPlayer.setOnErrorListener { failedPlayer, _, _ ->
-                if (mediaPlayer === failedPlayer) {
-                    releasePlayer()
-                    playbackStatus.setText(
-                        R.string.status_error
-                    )
-                }
+            player.setOnErrorListener { _, _, _ ->
+                releasePlayers()
+                playbackStatus.setText(
+                    R.string.status_error
+                )
                 true
             }
 
-            newPlayer.prepareAsync()
+            player.prepareAsync()
+            return player
 
         } catch (_: Exception) {
-            releasePlayer()
+            player.release()
             playbackStatus.setText(R.string.status_error)
+            return null
         }
     }
+
+    private fun updateReadyState() {
+        val ready =
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady)
+
+        if (ready) {
+            playbackStatus.setText(R.string.status_ready)
+        }
+
+        updateControls()
+    }
+
+    // TWO-TRACK PLAYBACK
 
     private fun togglePlayback() {
-        val player = mediaPlayer ?: return
+        if (isPlaying) {
+            pausePlayback()
+        } else {
+            startPlayback()
+        }
+    }
 
-        if (!isPrepared) return
+    private fun startPlayback() {
+        if (audioRecorder.isRecording) return
+
+        val ready =
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady)
+
+        if (!ready ||
+            (originalPlayer == null && recordingPlayer == null)
+        ) return
 
         try {
-            if (player.isPlaying) {
-                player.pause()
-                playPauseButton.setText(
-                    R.string.play_audio
-                )
-                playbackStatus.setText(
-                    R.string.status_paused
-                )
-            } else {
-                player.start()
-                playPauseButton.setText(
-                    R.string.pause_audio
-                )
-                playbackStatus.setText(
-                    R.string.status_playing
-                )
+            if (!isPaused) {
+                originalPlayer?.seekTo(0)
+                recordingPlayer?.seekTo(0)
+                originalEnded = false
+                recordingEnded = false
             }
+
+            val originalLevel =
+                originalVolume.progress / 100f
+
+            val recordingLevel =
+                recordingVolume.progress / 100f
+
+            originalPlayer?.setVolume(
+                originalLevel, originalLevel
+            )
+
+            recordingPlayer?.setVolume(
+                recordingLevel, recordingLevel
+            )
+
+            if (!originalEnded) {
+                originalPlayer?.start()
+            }
+
+            if (!recordingEnded) {
+                recordingPlayer?.start()
+            }
+
+            isPlaying = true
+            isPaused = false
+
+            playbackStatus.setText(R.string.status_playing)
+            updateControls()
+
         } catch (_: IllegalStateException) {
-            releasePlayer()
+            releasePlayers()
             playbackStatus.setText(R.string.status_error)
         }
     }
 
-    private fun releasePlayer() {
-        val oldPlayer = mediaPlayer
-        mediaPlayer = null
-        isPrepared = false
+    private fun pausePlayback() {
+        try {
+            if (originalPlayer?.isPlaying == true) {
+                originalPlayer?.pause()
+            }
 
-        playPauseButton.isEnabled = false
-        playPauseButton.setText(R.string.play_audio)
+            if (recordingPlayer?.isPlaying == true) {
+                recordingPlayer?.pause()
+            }
 
-        oldPlayer?.release()
+            isPlaying = false
+            isPaused = true
+
+            playbackStatus.setText(R.string.status_paused)
+            updateControls()
+
+        } catch (_: IllegalStateException) {
+            releasePlayers()
+            playbackStatus.setText(R.string.status_error)
+        }
     }
+
+    private fun finishPlayback() {
+        try {
+            if (originalPlayer?.isPlaying == true) {
+                originalPlayer?.pause()
+            }
+
+            if (recordingPlayer?.isPlaying == true) {
+                recordingPlayer?.pause()
+            }
+        } catch (_: IllegalStateException) {
+            // Release happens on activity stop.
+        }
+
+        isPlaying = false
+        isPaused = false
+
+        playbackStatus.setText(R.string.status_finished)
+        updateControls()
+    }
+
+    private fun releasePlayers() {
+        val oldOriginal = originalPlayer
+        val oldRecording = recordingPlayer
+
+        originalPlayer = null
+        recordingPlayer = null
+
+        originalReady = false
+        recordingReady = false
+        isPlaying = false
+        isPaused = false
+        originalEnded = false
+        recordingEnded = false
+
+        oldOriginal?.release()
+        oldRecording?.release()
+
+        updateControls()
+    }
+
+    // UI STATE
+
+    private fun updateTrackLabels() {
+        trackName.text = originalUri?.let {
+            getAudioFileName(it)
+        } ?: getString(R.string.no_track)
+
+        recordingName.text =
+            if (recordingFile != null) {
+                getString(R.string.recording_name)
+            } else {
+                getString(R.string.no_recording)
+            }
+    }
+
+    private fun updateControls() {
+        if (!::playPauseButton.isInitialized) return
+
+        val recording = audioRecorder.isRecording
+
+        val hasAudio =
+            originalPlayer != null ||
+            recordingPlayer != null
+
+        val ready =
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady)
+
+        importButton.isEnabled = !recording
+        playPauseButton.isEnabled =
+            !recording && hasAudio && ready
+
+        recordButton.setText(
+            if (recording) {
+                R.string.stop_recording
+            } else {
+                R.string.start_recording
+            }
+        )
+
+        playPauseButton.setText(
+            if (isPlaying) {
+                R.string.pause_mix
+            } else {
+                R.string.play_mix
+            }
+        )
+    }
+
+    // ACTIVITY LIFECYCLE
 
     override fun onResume() {
         super.onResume()
 
-        if (mediaPlayer == null) {
-            selectedAudioUri?.let { uri ->
-                trackName.text = getAudioFileName(uri)
-                loadAudio(uri)
-            }
+        if (!audioRecorder.isRecording &&
+            originalPlayer == null &&
+            recordingPlayer == null
+        ) {
+            preparePlayers()
         }
     }
 
     override fun onStop() {
-        releasePlayer()
+        if (audioRecorder.isRecording) {
+            val file = audioRecorder.stop()
+
+            if (file != null) {
+                recordingFile = file
+            }
+
+            updateTrackLabels()
+        }
+
+        releasePlayers()
         super.onStop()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        selectedAudioUri?.let {
+        originalUri?.let {
             outState.putString(
                 STATE_AUDIO_URI,
                 it.toString()
+            )
+        }
+
+        recordingFile?.let {
+            outState.putString(
+                STATE_RECORDING_PATH,
+                it.absolutePath
             )
         }
 
