@@ -15,10 +15,12 @@ import android.widget.TextView
 import com.remixhub.app.R
 import com.remixhub.app.audio.AudioRecorder
 import java.io.File
+import com.remixhub.app.data.ProjectStore
 
 class EditorActivity : Activity() {
 
     companion object {
+        const val EXTRA_PROJECT_ID = "project_id"
         private const val AUDIO_REQUEST_CODE = 1001
         private const val MIC_PERMISSION_CODE = 1002
         private const val STATE_AUDIO_URI = "audio_uri"
@@ -26,6 +28,8 @@ class EditorActivity : Activity() {
     }
 
     private lateinit var audioRecorder: AudioRecorder
+    private lateinit var projectStore: ProjectStore
+    private lateinit var projectId: String
 
     private var originalUri: Uri? = null
     private var recordingFile: File? = null
@@ -57,6 +61,26 @@ class EditorActivity : Activity() {
 
         audioRecorder = AudioRecorder(applicationContext)
 
+            projectStore = ProjectStore(this)
+
+            projectId = intent.getStringExtra(EXTRA_PROJECT_ID)
+                                            ?: run {
+                                            finish()
+                                        return
+                                        }
+
+val project = try {
+    projectStore.getById(projectId)
+} catch (_: Exception) {
+    null
+}
+
+if (project == null) {
+    finish()
+    return
+}
+
+
         trackName = findViewById(R.id.textTrackName)
         recordingName = findViewById(R.id.textRecordingName)
         playbackStatus = findViewById(R.id.textPlaybackStatus)
@@ -68,14 +92,19 @@ class EditorActivity : Activity() {
         originalVolume = findViewById(R.id.seekOriginalVolume)
         recordingVolume = findViewById(R.id.seekRecordingVolume)
 
-        originalUri = savedInstanceState
-            ?.getString(STATE_AUDIO_URI)
-            ?.let(Uri::parse)
 
-        recordingFile = savedInstanceState
-            ?.getString(STATE_RECORDING_PATH)
-            ?.let(::File)
-            ?.takeIf { it.exists() }
+originalUri = project.originalUri?.let(Uri::parse)
+
+recordingFile = project.recordingPath
+    ?.let(::File)
+    ?.takeIf { it.exists() }
+
+originalVolume.progress = project.originalVolume
+    .coerceIn(0, 100)
+
+recordingVolume.progress = project.recordingVolume
+    .coerceIn(0, 100)
+
 
         findViewById<TextView>(R.id.textBack)
             .setOnClickListener {
@@ -114,30 +143,61 @@ class EditorActivity : Activity() {
         updateControls()
     }
 
-    private fun volumeListener(
-        onVolumeChanged: (Float) -> Unit
-    ): SeekBar.OnSeekBarChangeListener {
-        return object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(
-                seekBar: SeekBar,
-                progress: Int,
-                fromUser: Boolean
-            ) {
-                if (fromUser) {
-                    onVolumeChanged(progress / 100f)
-                }
+
+private fun volumeListener(
+    onVolumeChanged: (Float) -> Unit
+): SeekBar.OnSeekBarChangeListener {
+
+    return object : SeekBar.OnSeekBarChangeListener {
+
+        override fun onProgressChanged(
+            seekBar: SeekBar,
+            progress: Int,
+            fromUser: Boolean
+        ) {
+            if (fromUser) {
+                onVolumeChanged(progress / 100f)
             }
+        }
 
-            override fun onStartTrackingTouch(
-                seekBar: SeekBar
-            ) = Unit
+        override fun onStartTrackingTouch(
+            seekBar: SeekBar
+        ) = Unit
 
-            override fun onStopTrackingTouch(
-                seekBar: SeekBar
-            ) = Unit
+        override fun onStopTrackingTouch(
+            seekBar: SeekBar
+        ) {
+            try {
+                when (seekBar.id) {
+                    R.id.seekOriginalVolume -> {
+                        projectStore.update(
+                            projectId,
+                            "Original volume changed"
+                        ) {
+                            it.copy(
+                                originalVolume = seekBar.progress
+                            )
+                        }
+                    }
+
+                    R.id.seekRecordingVolume -> {
+                        projectStore.update(
+                            projectId,
+                            "Recording volume changed"
+                        ) {
+                            it.copy(
+                                recordingVolume = seekBar.progress
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                playbackStatus.text =
+                    "Unable to save volume setting."
+            }
         }
     }
-
+}
     // AUDIO IMPORT
 
     private fun openAudioPicker() {
@@ -176,9 +236,22 @@ class EditorActivity : Activity() {
             // still support current-session playback.
         }
 
-        originalUri = uri
-        updateTrackLabels()
-        preparePlayers()
+
+try {
+    projectStore.update(
+        projectId,
+        "Original audio imported"
+    ) {
+        it.copy(originalUri = uri.toString())
+    }
+
+    originalUri = uri
+    updateTrackLabels()
+    preparePlayers()
+} catch (_: Exception) {
+    playbackStatus.text = "Unable to save imported audio."
+}
+
     }
 
     private fun getAudioFileName(uri: Uri): String {
@@ -267,10 +340,24 @@ class EditorActivity : Activity() {
     private fun stopRecording() {
         val file = audioRecorder.stop()
 
-        if (file != null) {
-            recordingFile = file
-            playbackStatus.setText(R.string.status_recorded)
-        } else {
+
+if (file != null) {
+    recordingFile = file
+
+    try {
+        projectStore.update(
+            projectId,
+            "Microphone recording added"
+        ) {
+            it.copy(recordingPath = file.absolutePath)
+        }
+
+        playbackStatus.setText(R.string.status_recorded)
+    } catch (_: Exception) {
+        playbackStatus.text = "Unable to save recording."
+    }
+}
+ else {
             playbackStatus.setText(
                 R.string.status_recording_error
             )
@@ -588,9 +675,22 @@ class EditorActivity : Activity() {
         if (audioRecorder.isRecording) {
             val file = audioRecorder.stop()
 
-            if (file != null) {
-                recordingFile = file
-            }
+
+if (file != null) {
+    recordingFile = file
+
+    try {
+        projectStore.update(
+            projectId,
+            "Microphone recording saved"
+        ) {
+            it.copy(recordingPath = file.absolutePath)
+        }
+    } catch (_: Exception) {
+        // The recording remains in app-private storage,
+        // but the project metadata could not be saved.
+    }
+}
 
             updateTrackLabels()
         }
