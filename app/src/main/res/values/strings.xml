@@ -45,4 +45,10 @@
     <string name="status_export_success">Mix exported successfully.</string>
     <string name="status_export_error">Unable to export the mix.</string>
     <string name="export_dialog_title">Save your WAV mix</string>
+
+    <string name="timeline_title">Audio Timeline</string>
+    <string name="recording_offset_default">Recording starts at 0.0s</string>
+    <string name="timeline_position_default">Position: 0:00 / 0:00</string>
+    <string name="timeline_offset_format">Recording starts at %1$.1fs</string>
+    <string name="timeline_position_format">Position: %1$s / %2$s</string>
 </resources>
