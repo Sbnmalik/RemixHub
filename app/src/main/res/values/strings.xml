@@ -38,4 +38,5 @@
     <string name="status_recorded">Recording saved. Ready to preview.</string>
     <string name="status_recording_error">Recording failed. Please try again.</string>
     <string name="status_permission_denied">Microphone permission is required to record.</string>
+    <string name="no_projects">No projects yet. Create your first remix!</string>
 </resources>
