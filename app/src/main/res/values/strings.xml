@@ -39,4 +39,10 @@
     <string name="status_recording_error">Recording failed. Please try again.</string>
     <string name="status_permission_denied">Microphone permission is required to record.</string>
     <string name="no_projects">No projects yet. Create your first remix!</string>
+
+    <string name="export_mix">Export Mix (WAV)</string>
+    <string name="status_exporting">Exporting audio...</string>
+    <string name="status_export_success">Mix exported successfully.</string>
+    <string name="status_export_error">Unable to export the mix.</string>
+    <string name="export_dialog_title">Save your WAV mix</string>
 </resources>

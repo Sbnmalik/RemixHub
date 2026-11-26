@@ -16,6 +16,7 @@ import com.remixhub.app.R
 import com.remixhub.app.audio.AudioRecorder
 import java.io.File
 import com.remixhub.app.data.ProjectStore
+import com.remixhub.app.audio.WavMixExporter
 
 class EditorActivity : Activity() {
 
