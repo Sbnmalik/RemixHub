@@ -9,5 +9,6 @@ data class RemixProject(
     val recordingPath: String? = null,
     val originalVolume: Int = 100,
     val recordingVolume: Int = 100,
+    val recordingOffsetMs: Int = 0,
     val history: List<String> = emptyList()
 )
