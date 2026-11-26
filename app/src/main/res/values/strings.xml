@@ -9,20 +9,33 @@
     <string name="my_projects">My Projects</string>
 
     <string name="editor_title">Music Editor</string>
-    <string name="editor_description">Start creating by importing an audio track.</string>
+    <string name="editor_description">Import music, record sounds and create your mix.</string>
 
-    <string name="track_label">Audio Track</string>
+    <string name="track_label">Original Track</string>
     <string name="no_track">No audio track selected</string>
-
     <string name="import_audio">Import Audio</string>
-    <string name="play_audio">Play</string>
-    <string name="pause_audio">Pause</string>
+    <string name="original_volume">Original Track Volume</string>
 
-    <string name="status_empty">Import an audio file to begin.</string>
+    <string name="recorded_track">Recorded Track</string>
+    <string name="no_recording">No recording available</string>
+    <string name="start_recording">Start Recording</string>
+    <string name="stop_recording">Stop Recording</string>
+    <string name="recording_volume">Recorded Track Volume</string>
+    <string name="recording_name">Microphone Recording</string>
+
+    <string name="mix_preview">Mix Preview</string>
+    <string name="play_mix">Play Mix</string>
+    <string name="pause_mix">Pause Mix</string>
+
+    <string name="status_empty">Import or record audio to begin.</string>
     <string name="status_loading">Loading audio...</string>
     <string name="status_ready">Audio ready to play.</string>
-    <string name="status_playing">Playing audio...</string>
+    <string name="status_playing">Playing mix...</string>
     <string name="status_paused">Playback paused.</string>
     <string name="status_finished">Playback finished.</string>
     <string name="status_error">Unable to load this audio file.</string>
+    <string name="status_recording">Recording... Tap Stop Recording when finished.</string>
+    <string name="status_recorded">Recording saved. Ready to preview.</string>
+    <string name="status_recording_error">Recording failed. Please try again.</string>
+    <string name="status_permission_denied">Microphone permission is required to record.</string>
 </resources>
