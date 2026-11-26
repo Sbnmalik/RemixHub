@@ -912,6 +912,114 @@ if (file != null) {
         )
     }
 
+private fun refreshTimelineDuration() {
+    val originalDuration =
+        if (originalReady) {
+            originalPlayer?.duration ?: 0
+        } else {
+            0
+        }
+
+    val recordingDuration =
+        if (recordingReady) {
+            recordingPlayer?.duration ?: 0
+        } else {
+            0
+        }
+
+    timelineDurationMs = maxOf(
+        originalDuration,
+        if (recordingReady) {
+            recordingOffsetMs + recordingDuration
+        } else {
+            0
+        }
+    ).coerceAtLeast(0)
+
+    playheadMs = playheadMs.coerceIn(
+        0,
+        timelineDurationMs
+    )
+
+    if (::timelineSeekBar.isInitialized) {
+        timelineSeekBar.max =
+            (timelineDurationMs + 99) / 100
+    }
+
+    updateTimelineDisplay()
+}
+
+private fun formatTime(milliseconds: Int): String {
+    val totalSeconds = milliseconds / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+
+    return String.format(
+        Locale.US,
+        "%d:%02d",
+        minutes,
+        seconds
+    )
+}
+
+private fun updateTimelineDisplay() {
+    if (!::timelineSeekBar.isInitialized) return
+
+    timelineSeekBar.progress = playheadMs / 100
+
+    timelineText.text = getString(
+        R.string.timeline_position_format,
+        formatTime(playheadMs),
+        formatTime(timelineDurationMs)
+    )
+
+    offsetText.text = getString(
+        R.string.timeline_offset_format,
+        recordingOffsetMs / 1000.0
+    )
+}
+
+private fun seekPreviewTo(positionMs: Int) {
+    if (audioRecorder.isRecording || exporting) return
+
+    timelineHandler.removeCallbacks(timelineTicker)
+
+    if (isPlaying) {
+        pausePlayback()
+    }
+
+    playheadMs = positionMs.coerceIn(
+        0,
+        timelineDurationMs
+    )
+
+    isPaused = true
+
+    try {
+        originalPlayer?.takeIf { originalReady }?.let {
+            it.seekTo(
+                playheadMs.coerceAtMost(it.duration).toLong(),
+                MediaPlayer.SEEK_CLOSEST
+            )
+        }
+
+        recordingPlayer?.takeIf { recordingReady }?.let {
+            val positionInRecording =
+                (playheadMs - recordingOffsetMs)
+                    .coerceIn(0, it.duration)
+
+            it.seekTo(
+                positionInRecording.toLong(),
+                MediaPlayer.SEEK_CLOSEST
+            )
+        }
+    } catch (_: IllegalStateException) {
+        playbackStatus.setText(R.string.status_error)
+    }
+
+    updateTimelineDisplay()
+}
+
     // ACTIVITY LIFECYCLE
 
     override fun onResume() {
