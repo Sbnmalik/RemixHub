@@ -28,7 +28,8 @@ class EditorActivity : Activity() {
         private const val STATE_AUDIO_URI = "audio_uri"
         private const val STATE_RECORDING_PATH = "recording_path"
     }
-
+    private lateinit var exportButton: Button
+    private var exporting = false
     private lateinit var audioRecorder: AudioRecorder
     private lateinit var projectStore: ProjectStore
     private lateinit var projectId: String
