@@ -17,6 +17,10 @@ import com.remixhub.app.audio.AudioRecorder
 import java.io.File
 import com.remixhub.app.data.ProjectStore
 import com.remixhub.app.audio.WavMixExporter
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import java.util.Locale
 
 class EditorActivity : Activity() {
 
@@ -33,6 +37,10 @@ class EditorActivity : Activity() {
     private lateinit var audioRecorder: AudioRecorder
     private lateinit var projectStore: ProjectStore
     private lateinit var projectId: String
+    private lateinit var offsetSeekBar: SeekBar
+    private lateinit var timelineSeekBar: SeekBar
+    private lateinit var offsetText: TextView
+    private lateinit var timelineText: TextView
 
     private var originalUri: Uri? = null
     private var recordingFile: File? = null
@@ -46,6 +54,10 @@ class EditorActivity : Activity() {
     private var isPaused = false
     private var originalEnded = false
     private var recordingEnded = false
+    private var recordingOffsetMs = 0
+    private var playheadMs = 0
+    private var timelineDurationMs = 0
+    private var playbackStartedAtMs = 0L
 
     private lateinit var trackName: TextView
     private lateinit var recordingName: TextView
@@ -57,7 +69,29 @@ class EditorActivity : Activity() {
 
     private lateinit var originalVolume: SeekBar
     private lateinit var recordingVolume: SeekBar
+private val timelineHandler = Handler(
+    Looper.getMainLooper()
+)
 
+private val timelineTicker = object : Runnable {
+    override fun run() {
+        if (!isPlaying) return
+
+        playheadMs = (
+            SystemClock.elapsedRealtime() -
+            playbackStartedAtMs
+        ).toInt().coerceIn(0, timelineDurationMs)
+
+        startRecordingLayerIfDue()
+        updateTimelineDisplay()
+
+        if (playheadMs >= timelineDurationMs) {
+            finishPlayback()
+        } else {
+            timelineHandler.postDelayed(this, 50L)
+        }
+    }
+}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_editor)
@@ -146,6 +180,85 @@ recordingVolume.progress = project.recordingVolume
             }
         )
 
+offsetSeekBar = findViewById(R.id.seekRecordingOffset)
+timelineSeekBar = findViewById(R.id.seekTimeline)
+
+offsetText = findViewById(R.id.textOffset)
+timelineText = findViewById(R.id.textTimelinePosition)
+
+offsetSeekBar.progress =
+    (recordingOffsetMs / 100).coerceIn(0, 300)
+
+offsetSeekBar.setOnSeekBarChangeListener(
+    object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(
+            seekBar: SeekBar,
+            progress: Int,
+            fromUser: Boolean
+        ) {
+            if (fromUser) {
+                recordingOffsetMs = progress * 100
+                refreshTimelineDuration()
+                updateTimelineDisplay()
+            }
+        }
+
+        override fun onStartTrackingTouch(
+            seekBar: SeekBar
+        ) {
+            if (isPlaying) pausePlayback()
+        }
+
+        override fun onStopTrackingTouch(
+            seekBar: SeekBar
+        ) {
+            try {
+                projectStore.update(
+                    projectId,
+                    "Recording moved to ${recordingOffsetMs / 1000.0}s"
+                ) {
+                    it.copy(
+                        recordingOffsetMs = recordingOffsetMs
+                    )
+                }
+            } catch (_: Exception) {
+                playbackStatus.text =
+                    "Unable to save recording position."
+            }
+        }
+    }
+)
+
+timelineSeekBar.setOnSeekBarChangeListener(
+    object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(
+            seekBar: SeekBar,
+            progress: Int,
+            fromUser: Boolean
+        ) {
+            if (fromUser) {
+                playheadMs = (
+                    progress * 100
+                ).coerceAtMost(timelineDurationMs)
+
+                updateTimelineDisplay()
+            }
+        }
+
+        override fun onStartTrackingTouch(
+            seekBar: SeekBar
+        ) {
+            if (isPlaying) pausePlayback()
+        }
+
+        override fun onStopTrackingTouch(
+            seekBar: SeekBar
+        ) {
+            seekPreviewTo(playheadMs)
+        }
+    }
+)
+        updateTimelineDisplay()
         updateTrackLabels()
         updateControls()
     }
@@ -336,9 +449,11 @@ private fun exportMix(destinationUri: Uri) {
         playbackStatus.text = "No audio available to export."
         return
     }
-
+    recordingOffsetMs = project.recordingOffsetMs
+        .coerceIn(0, 30000)
     val originalGain = originalVolume.progress / 100f
     val recordingGain = recordingVolume.progress / 100f
+    
 
     exporting = true
     playbackStatus.setText(R.string.status_exporting)
