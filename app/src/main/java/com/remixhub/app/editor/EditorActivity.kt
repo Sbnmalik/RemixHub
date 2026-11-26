@@ -208,6 +208,7 @@ private fun volumeListener(
     // AUDIO IMPORT
 
     private fun openAudioPicker() {
+        if (exporting || audioRecorder.isRecording) return
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "audio/*"
@@ -226,6 +227,15 @@ private fun volumeListener(
         data: Intent?
     ) {
         super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == EXPORT_REQUEST_CODE) {
+    if (resultCode == RESULT_OK) {
+        data?.data?.let { destination ->
+            exportMix(destination)
+        }
+    }
+    return
+}
 
         if (requestCode != AUDIO_REQUEST_CODE ||
             resultCode != RESULT_OK
@@ -548,6 +558,10 @@ if (file != null) {
         }
 
         updateControls()
+        exportButton.isEnabled =
+        !audioRecorder.isRecording &&
+        !exporting &&
+        (originalUri != null || recordingFile != null)
     }
 
     private fun createPlayer(
