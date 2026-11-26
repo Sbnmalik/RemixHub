@@ -745,100 +745,166 @@ private fun updateReadyState() {
         }
     }
 
-    private fun startPlayback() {
-        if (audioRecorder.isRecording) return
 
-        val ready =
-            (originalUri == null || originalReady) &&
-            (recordingFile == null || recordingReady)
+private fun startPlayback() {
+    if (audioRecorder.isRecording || exporting) return
 
-        if (!ready ||
-            (originalPlayer == null && recordingPlayer == null)
-        ) return
+    val ready =
+        (originalUri == null || originalReady) &&
+        (recordingFile == null || recordingReady)
 
-        try {
-            if (!isPaused) {
-                originalPlayer?.seekTo(0)
-                recordingPlayer?.seekTo(0)
-                originalEnded = false
-                recordingEnded = false
-            }
+    if (!ready || timelineDurationMs <= 0) return
 
-            val originalLevel =
-                originalVolume.progress / 100f
+    timelineHandler.removeCallbacks(timelineTicker)
 
-            val recordingLevel =
-                recordingVolume.progress / 100f
-
-            originalPlayer?.setVolume(
-                originalLevel, originalLevel
-            )
-
-            recordingPlayer?.setVolume(
-                recordingLevel, recordingLevel
-            )
-
-            if (!originalEnded) {
-                originalPlayer?.start()
-            }
-
-            if (!recordingEnded) {
-                recordingPlayer?.start()
-            }
-
-            isPlaying = true
-            isPaused = false
-
-            playbackStatus.setText(R.string.status_playing)
-            updateControls()
-
-        } catch (_: IllegalStateException) {
-            releasePlayers()
-            playbackStatus.setText(R.string.status_error)
-        }
+    if (playheadMs >= timelineDurationMs) {
+        playheadMs = 0
     }
 
-    private fun pausePlayback() {
-        try {
-            if (originalPlayer?.isPlaying == true) {
-                originalPlayer?.pause()
+    try {
+        val originalGain =
+            originalVolume.progress / 100f
+
+        val recordingGain =
+            recordingVolume.progress / 100f
+
+        originalPlayer?.setVolume(
+            originalGain, originalGain
+        )
+
+        recordingPlayer?.setVolume(
+            recordingGain, recordingGain
+        )
+
+        // Prepare the original player at the
+        // selected global timeline position.
+        originalPlayer?.takeIf { originalReady }?.let {
+            if (playheadMs < it.duration) {
+                it.seekTo(
+                    playheadMs.toLong(),
+                    MediaPlayer.SEEK_CLOSEST
+                )
+                it.start()
             }
-
-            if (recordingPlayer?.isPlaying == true) {
-                recordingPlayer?.pause()
-            }
-
-            isPlaying = false
-            isPaused = true
-
-            playbackStatus.setText(R.string.status_paused)
-            updateControls()
-
-        } catch (_: IllegalStateException) {
-            releasePlayers()
-            playbackStatus.setText(R.string.status_error)
-        }
-    }
-
-    private fun finishPlayback() {
-        try {
-            if (originalPlayer?.isPlaying == true) {
-                originalPlayer?.pause()
-            }
-
-            if (recordingPlayer?.isPlaying == true) {
-                recordingPlayer?.pause()
-            }
-        } catch (_: IllegalStateException) {
-            // Release happens on activity stop.
         }
 
-        isPlaying = false
+        // If the current position is already
+        // past the recording start, begin from
+        // the corresponding position in that layer.
+        startRecordingLayerIfDue()
+
+        playbackStartedAtMs =
+            SystemClock.elapsedRealtime() - playheadMs
+
+        isPlaying = true
         isPaused = false
 
-        playbackStatus.setText(R.string.status_finished)
+        playbackStatus.setText(
+            R.string.status_playing
+        )
+
         updateControls()
+        updateTimelineDisplay()
+
+        timelineHandler.post(timelineTicker)
+
+    } catch (_: IllegalStateException) {
+        releasePlayers()
+        playbackStatus.setText(R.string.status_error)
     }
+}
+
+private fun startRecordingLayerIfDue() {
+    if (!recordingReady) return
+
+    val player = recordingPlayer ?: return
+
+    val relativePosition =
+        playheadMs - recordingOffsetMs
+
+    if (relativePosition < 0 ||
+        relativePosition >= player.duration
+    ) {
+        return
+    }
+
+    try {
+        if (!player.isPlaying) {
+            player.seekTo(
+                relativePosition.toLong(),
+                MediaPlayer.SEEK_CLOSEST
+            )
+
+            player.setVolume(
+                recordingVolume.progress / 100f,
+                recordingVolume.progress / 100f
+            )
+
+            player.start()
+        }
+    } catch (_: IllegalStateException) {
+        playbackStatus.setText(R.string.status_error)
+    }
+}
+
+private fun pausePlayback() {
+    timelineHandler.removeCallbacks(timelineTicker)
+
+    if (isPlaying) {
+        playheadMs = (
+            SystemClock.elapsedRealtime() -
+            playbackStartedAtMs
+        ).toInt().coerceIn(0, timelineDurationMs)
+    }
+
+    try {
+        if (originalPlayer?.isPlaying == true) {
+            originalPlayer?.pause()
+        }
+
+        if (recordingPlayer?.isPlaying == true) {
+            recordingPlayer?.pause()
+        }
+    } catch (_: IllegalStateException) {
+        releasePlayers()
+        playbackStatus.setText(R.string.status_error)
+        return
+    }
+
+    isPlaying = false
+    isPaused = true
+
+    playbackStatus.setText(R.string.status_paused)
+    updateControls()
+    updateTimelineDisplay()
+}
+
+
+
+private fun finishPlayback() {
+    timelineHandler.removeCallbacks(timelineTicker)
+
+    try {
+        if (originalPlayer?.isPlaying == true) {
+            originalPlayer?.pause()
+        }
+
+        if (recordingPlayer?.isPlaying == true) {
+            recordingPlayer?.pause()
+        }
+    } catch (_: IllegalStateException) {
+        // Players are cleaned up on activity stop.
+    }
+
+    playheadMs = timelineDurationMs
+    isPlaying = false
+    isPaused = false
+
+    playbackStatus.setText(R.string.status_finished)
+
+    updateControls()
+    updateTimelineDisplay()
+}
 
     private fun releasePlayers() {
         timelineHandler.removeCallbacks(timelineTicker)
@@ -910,6 +976,17 @@ private fun updateReadyState() {
                 R.string.play_mix
             }
         )
+        if (::offsetSeekBar.isInitialized) {
+    offsetSeekBar.isEnabled =
+        !audioRecorder.isRecording &&
+        !exporting &&
+        recordingReady
+
+    timelineSeekBar.isEnabled =
+        !audioRecorder.isRecording &&
+        !exporting &&
+        timelineDurationMs > 0
+}
     }
 
 private fun refreshTimelineDuration() {
