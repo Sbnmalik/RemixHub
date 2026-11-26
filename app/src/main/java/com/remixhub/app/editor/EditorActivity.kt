@@ -621,6 +621,7 @@ if (file != null) {
 
     private fun preparePlayers() {
         releasePlayers()
+        playHeadMs = 0
         updateControls()
 
         if (originalUri == null && recordingFile == null) {
@@ -640,11 +641,8 @@ if (file != null) {
                     updateReadyState()
                 },
                 onFinished = {
-                    originalEnded = true
-
                     // Original audio controls the end
                     // of a two-track preview.
-                    finishPlayback()
                 }
             )
         }
@@ -662,11 +660,6 @@ if (file != null) {
                         updateReadyState()
                     },
                     onFinished = {
-                        recordingEnded = true
-
-                        if (originalPlayer == null) {
-                            finishPlayback()
-                        }
                     }
                 )
             }
@@ -726,17 +719,21 @@ if (file != null) {
         }
     }
 
-    private fun updateReadyState() {
-        val ready =
-            (originalUri == null || originalReady) &&
-            (recordingFile == null || recordingReady)
 
-        if (ready) {
-            playbackStatus.setText(R.string.status_ready)
-        }
+private fun updateReadyState() {
+    val ready =
+        (originalUri == null || originalReady) &&
+        (recordingFile == null || recordingReady)
 
-        updateControls()
+    refreshTimelineDuration()
+
+    if (ready) {
+        playbackStatus.setText(R.string.status_ready)
     }
+
+    updateControls()
+}
+
 
     // TWO-TRACK PLAYBACK
 
@@ -844,6 +841,7 @@ if (file != null) {
     }
 
     private fun releasePlayers() {
+        timelineHandler.removeCallbacks(timelineTicker)
         val oldOriginal = originalPlayer
         val oldRecording = recordingPlayer
 
@@ -859,6 +857,8 @@ if (file != null) {
 
         oldOriginal?.release()
         oldRecording?.release()
+        timelineDurationMs = 0
+        updateTimelineDisplay()
 
         updateControls()
     }
