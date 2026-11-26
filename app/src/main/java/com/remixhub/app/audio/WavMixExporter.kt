@@ -73,13 +73,14 @@ class WavMixExporter(
         }
     }
 
-    fun export(
-        originalUri: Uri?,
-        recordingUri: Uri?,
-        originalVolume: Float,
-        recordingVolume: Float,
-        destination: OutputStream
-    ) {
+fun export(
+    originalUri: Uri?,
+    recordingUri: Uri?,
+    originalVolume: Float,
+    recordingVolume: Float,
+    recordingOffsetMs: Int,
+    destination: OutputStream
+) {
         require(originalUri != null || recordingUri != null) {
             "There is no audio to export."
         }
@@ -87,13 +88,24 @@ class WavMixExporter(
         val original = originalUri?.let(::decode)
         val recording = recordingUri?.let(::decode)
 
-        val totalFrames = min(
-            MAX_FRAMES,
-            max(
-                original?.durationFrames() ?: 0,
-                recording?.durationFrames() ?: 0
-            )
-        )
+
+val offsetFrames = (
+    recordingOffsetMs.coerceIn(0, 30000)
+        .toLong() * SAMPLE_RATE / 1000
+).toInt()
+
+val totalFrames = min(
+    MAX_FRAMES,
+    max(
+        original?.durationFrames() ?: 0,
+        if (recording != null) {
+            recording.durationFrames() + offsetFrames
+        } else {
+            0
+        }
+    )
+)
+
 
         require(totalFrames > 0) {
             "The audio tracks contain no samples."
@@ -130,9 +142,12 @@ class WavMixExporter(
                         time, channel
                     ) ?: 0.0
 
-                    val second = recording?.sampleAt(
-                        time, channel
-                    ) ?: 0.0
+val recordingTime =
+    time - recordingOffsetMs.coerceIn(0, 30000) / 1000.0
+
+val second = recording?.sampleAt(
+    recordingTime, channel
+) ?: 0.0
 
                     val mixed = (
                         first * originalGain +

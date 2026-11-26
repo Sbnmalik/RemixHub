@@ -145,7 +145,8 @@ originalVolume.progress = project.originalVolume
 
 recordingVolume.progress = project.recordingVolume
     .coerceIn(0, 100)
-
+recordingOffsetMs = project.recordingOffsetMs
+    .coerceIn(0, 30000)
 
         findViewById<TextView>(R.id.textBack)
             .setOnClickListener {
@@ -449,10 +450,10 @@ private fun exportMix(destinationUri: Uri) {
         playbackStatus.text = "No audio available to export."
         return
     }
-    recordingOffsetMs = project.recordingOffsetMs
-        .coerceIn(0, 30000)
+
     val originalGain = originalVolume.progress / 100f
     val recordingGain = recordingVolume.progress / 100f
+    val exportOffsetMs = recordingOffsetMs
     
 
     exporting = true
@@ -477,14 +478,14 @@ private fun exportMix(destinationUri: Uri) {
                 val exporter = WavMixExporter(
                     applicationContext
                 )
-
-                exporter.export(
-                    originalUri = sourceOriginal,
-                    recordingUri = sourceRecording,
-                    originalVolume = originalGain,
-                    recordingVolume = recordingGain,
-                    destination = it
-                )
+exporter.export(
+    originalUri = sourceOriginal,
+    recordingUri = sourceRecording,
+    originalVolume = originalGain,
+    recordingVolume = recordingGain,
+    recordingOffsetMs = exportOffsetMs,
+    destination = it
+)
             }
 
             projectStore.update(
@@ -621,7 +622,7 @@ if (file != null) {
 
     private fun preparePlayers() {
         releasePlayers()
-        playHeadMs = 0
+        playheadMs = 0
         updateControls()
 
         if (originalUri == null && recordingFile == null) {
