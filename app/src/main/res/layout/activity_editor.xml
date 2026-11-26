@@ -14,40 +14,42 @@
 
         <TextView
             android:id="@+id/textBack"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="48dp"
             android:gravity="center_vertical"
             android:text="← Back"
-            android:textColor="@color/black"
             android:textSize="16sp"
+            android:textColor="@color/black"
             android:clickable="true"
             android:focusable="true"/>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="16dp"
             android:text="@string/editor_title"
-            android:textColor="@color/black"
-            android:textSize="32sp"
-            android:textStyle="bold"/>
+            android:textSize="30sp"
+            android:textStyle="bold"
+            android:textColor="@color/black"/>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/editor_description"
-            android:textColor="@color/gray"
-            android:textSize="16sp"/>
+            android:textSize="15sp"
+            android:textColor="@color/gray"/>
+
+        <!-- ORIGINAL TRACK -->
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="48dp"
+            android:layout_marginTop="32dp"
             android:text="@string/track_label"
-            android:textColor="@color/black"
-            android:textSize="18sp"
-            android:textStyle="bold"/>
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/black"/>
 
         <TextView
             android:id="@+id/textTrackName"
@@ -57,18 +59,93 @@
             android:padding="16dp"
             android:background="@color/light_gray"
             android:text="@string/no_track"
-            android:textColor="@color/black"
-            android:textSize="16sp"/>
+            android:textColor="@color/black"/>
 
         <Button
             android:id="@+id/btnImportAudio"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="12dp"
             android:text="@string/import_audio"
             android:textAllCaps="false"
             android:textColor="@color/white"
             android:backgroundTint="@color/black"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/original_volume"
+            android:textColor="@color/black"/>
+
+        <SeekBar
+            android:id="@+id/seekOriginalVolume"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="100"
+            android:progressTint="@color/black"
+            android:thumbTint="@color/black"
+            android:progressBackgroundTint="@color/light_gray"/>
+
+        <!-- RECORDED TRACK -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="@string/recorded_track"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/black"/>
+
+        <TextView
+            android:id="@+id/textRecordingName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:padding="16dp"
+            android:background="@color/light_gray"
+            android:text="@string/no_recording"
+            android:textColor="@color/black"/>
+
+        <Button
+            android:id="@+id/btnRecord"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/start_recording"
+            android:textAllCaps="false"
+            android:textColor="@color/white"
+            android:backgroundTint="@color/black"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/recording_volume"
+            android:textColor="@color/black"/>
+
+        <SeekBar
+            android:id="@+id/seekRecordingVolume"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100"
+            android:progress="100"
+            android:progressTint="@color/black"
+            android:thumbTint="@color/black"
+            android:progressBackgroundTint="@color/light_gray"/>
+
+        <!-- MIX PREVIEW -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="@string/mix_preview"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/black"/>
 
         <Button
             android:id="@+id/btnPlayPause"
@@ -76,7 +153,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:enabled="false"
-            android:text="@string/play_audio"
+            android:text="@string/play_mix"
             android:textAllCaps="false"
             android:textColor="@color/white"
             android:backgroundTint="@color/black"/>
@@ -85,12 +162,12 @@
             android:id="@+id/textPlaybackStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:gravity="center"
+            android:layout_marginTop="16dp"
+            android:layout_marginBottom="24dp"
             android:text="@string/status_empty"
             android:textColor="@color/gray"
+            android:gravity="center"
             android:textSize="14sp"/>
 
     </LinearLayout>
-
 </ScrollView>
