@@ -24,6 +24,7 @@ class EditorActivity : Activity() {
         const val EXTRA_PROJECT_ID = "project_id"
         private const val AUDIO_REQUEST_CODE = 1001
         private const val MIC_PERMISSION_CODE = 1002
+        private const val EXPORT_REQUEST_CODE = 1003
         private const val STATE_AUDIO_URI = "audio_uri"
         private const val STATE_RECORDING_PATH = "recording_path"
     }
