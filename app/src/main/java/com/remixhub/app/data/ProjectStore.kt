@@ -34,7 +34,10 @@ class ProjectStore(context: Context) {
                 recordingVolume = item.optInt("recordingVolume", 100),
                 history = List(historyArray.length()) {
                     historyArray.getString(it)
-                }
+                },
+                recordingOffsetMs = item.optInt(
+                                "recordingOffsetMs", 0
+                        ),
             )
         }
     }
@@ -56,6 +59,7 @@ class ProjectStore(context: Context) {
                 put("originalVolume", project.originalVolume)
                 put("recordingVolume", project.recordingVolume)
                 put("history", historyArray)
+                put("recordingOffsetMs", project.recordingOffsetMs)
             }
 
             array.put(item)
