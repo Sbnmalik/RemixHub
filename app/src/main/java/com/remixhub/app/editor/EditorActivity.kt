@@ -349,9 +349,10 @@ class EditorActivity : Activity() {
                 RecordingClip(
                         id = UUID.randomUUID().toString(),
                         filePath = file.absolutePath,
-                        offsetMs = 0
+                        offsetMs = 0,
+                        isMuted = false,
                         name = "Recording $nextNumber",
-                        volume = 100,
+                        volume = 100
                 )
 
         return try {
