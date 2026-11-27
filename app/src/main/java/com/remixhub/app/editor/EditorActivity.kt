@@ -25,6 +25,9 @@ import com.remixhub.app.data.RecordingClip
 import java.io.File
 import java.util.Locale
 import java.util.UUID
+import android.app.AlertDialog
+import android.text.InputType
+import android.widget.EditText
 
 class EditorActivity : Activity() {
 
