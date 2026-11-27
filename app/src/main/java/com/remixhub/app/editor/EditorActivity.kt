@@ -48,6 +48,7 @@ class EditorActivity : Activity() {
             val player: MediaPlayer,
             var ready: Boolean = false
     )
+    private lateinit var visualTimeline: TimelineView
 
     private lateinit var exportButton: Button
     private var exporting = false
@@ -150,7 +151,7 @@ class EditorActivity : Activity() {
 
         selectedClipId = selectedClip?.id
         selectedClipMuted = selectedClip?.isMuted ?: false
-
+        
         trackName = findViewById(R.id.textTrackName)
         recordingName = findViewById(R.id.textRecordingName)
         playbackStatus = findViewById(R.id.textPlaybackStatus)
@@ -268,6 +269,24 @@ class EditorActivity : Activity() {
                     }
                 }
         )
+
+            visualTimeline = findViewById(R.id.visualTimeline)
+
+visualTimeline.onClipSelected = { clipId ->
+    if (!audioRecorder.isRecording && !exporting) {
+        val clip = projectStore.getById(projectId)
+            ?.clips
+            ?.firstOrNull { it.id == clipId }
+
+        if (clip != null) {
+            selectRecordingClip(clip)
+        }
+    }
+}
+
+visualTimeline.onClipMoved = { clipId, newOffsetMs ->
+    moveClipOnTimeline(clipId, newOffsetMs)
+}
 
         updateTimelineDisplay()
         displayRecordingClips()
@@ -1572,6 +1591,53 @@ class EditorActivity : Activity() {
         updateTimelineDisplay()
     }
 
+private fun moveClipOnTimeline(
+    clipId: String,
+    newOffsetMs: Int
+) {
+    if (audioRecorder.isRecording || exporting) return
+
+    val offset = newOffsetMs.coerceIn(0, 30000)
+
+    try {
+        projectStore.update(
+            projectId,
+            "Clip moved to ${offset / 1000.0}s"
+        ) { project ->
+            project.copy(
+                clips = project.clips.map { clip ->
+                    if (clip.id == clipId) {
+                        clip.copy(offsetMs = offset)
+                    } else {
+                        clip
+                    }
+                },
+                recordingOffsetMs =
+                    if (project.activeClipId == clipId) {
+                        offset
+                    } else {
+                        project.recordingOffsetMs
+                    }
+            )
+        }
+
+        if (selectedClipId == clipId) {
+            recordingOffsetMs = offset
+            offsetSeekBar.progress = offset / 100
+        }
+
+        // Rebuild playback to use the updated offsets.
+        preparePlayers()
+        displayRecordingClips()
+        refreshVisualTimeline()
+
+    } catch (_: Exception) {
+        playbackStatus.text =
+            "Unable to save clip position."
+        refreshVisualTimeline()
+    }
+}
+
     // ACTIVITY LIFECYCLE
 
     override fun onResume() {
@@ -1614,4 +1680,4 @@ class EditorActivity : Activity() {
 
         super.onSaveInstanceState(outState)
     }
-}
+}private lateinit var visualTimeline: TimelineView
