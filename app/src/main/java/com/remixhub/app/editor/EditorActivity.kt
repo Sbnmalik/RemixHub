@@ -36,6 +36,13 @@ class EditorActivity : Activity() {
         private const val STATE_AUDIO_URI = "audio_uri"
         private const val STATE_RECORDING_PATH = "recording_path"
     }
+    private data class ExtraClipPlayer(
+    val clipId: String,
+    val offsetMs: Int,
+    val muted: Boolean,
+    val player: MediaPlayer,
+    var ready: Boolean = false
+    )
 
     private lateinit var exportButton: Button
     private var exporting = false
@@ -75,6 +82,14 @@ class EditorActivity : Activity() {
 
     private lateinit var originalVolume: SeekBar
     private lateinit var recordingVolume: SeekBar
+
+    private val extraClipPlayers =
+    mutableListOf<ExtraClipPlayer>()
+
+    private val finishedClipIds = mutableSetOf<String>()
+
+    private var selectedClipId: String? = null
+    private var selectedClipMuted = false
 
     private val timelineHandler = Handler(Looper.getMainLooper())
 
