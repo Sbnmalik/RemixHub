@@ -44,6 +44,7 @@ class EditorActivity : Activity() {
     private lateinit var timelineSeekBar: SeekBar
     private lateinit var offsetText: TextView
     private lateinit var timelineText: TextView
+    private lateinit var clipContainer: LinearLayout
 
     private var originalUri: Uri? = null
     private var recordingFile: File? = null
