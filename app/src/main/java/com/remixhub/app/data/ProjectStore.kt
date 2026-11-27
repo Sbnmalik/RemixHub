@@ -28,7 +28,8 @@ class ProjectStore(context: Context) {
                     RecordingClip(
                         id = clip.getString("id"),
                         filePath = clip.getString("filePath"),
-                        offsetMs = clip.optInt("offsetMs", 0).coerceAtLeast(0)
+                        offsetMs = clip.optInt("offsetMs", 0).coerceAtLeast(0),
+                        isMuted = clip.optBoolean("isMuted", false)
                     )
                 }
             } else {
@@ -83,6 +84,7 @@ class ProjectStore(context: Context) {
                         put("id", clip.id)
                         put("filePath", clip.filePath)
                         put("offsetMs", clip.offsetMs)
+                        put("isMuted", clip.isMuted)
                     }
                 )
             }
