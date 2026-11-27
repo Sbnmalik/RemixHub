@@ -309,6 +309,32 @@ class EditorActivity : Activity() {
             val clip = clipVolume.coerceIn(0, 100) / 100f
         return master * clip
     }
+    private fun applyClipVolumePreview(
+        clipId: String,
+        clipVolume: Int
+    ) {
+            val project = projectStore.getById(projectId)
+                ?: return
+
+            val clip = project.clips.firstOrNull {
+                it.id == clipId
+            } ?: return
+
+        val gain = if (clip.isMuted) {
+                    0f
+            } else {
+                effectiveClipGain(clipVolume)
+            }
+
+        if (clipId == selectedClipId) {
+            recordingPlayer?.setVolume(gain, gain)
+        } else {
+            extraClipPlayers
+                .firstOrNull { it.clipId == clipId }
+                ?.player
+                ?.setVolume(gain, gain)
+        }
+    }
 
     private fun saveNewRecording(file: File): Boolean {
         val clip = RecordingClip(
