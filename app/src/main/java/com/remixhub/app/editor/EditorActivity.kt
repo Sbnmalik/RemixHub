@@ -139,6 +139,8 @@ class EditorActivity : Activity() {
         val selectedClip = project.clips.firstOrNull {
             it.id == project.activeClipId
         } ?: project.clips.firstOrNull()
+        selectedClipId = selectedClip?.id
+        selectedClipMuted = selectedClip?.isMuted ?: false
 
         recordingFile = selectedClip
             ?.filePath
@@ -415,7 +417,8 @@ class EditorActivity : Activity() {
 
             recordingFile = File(clip.filePath)
             recordingOffsetMs = clip.offsetMs.coerceIn(0, 30000)
-
+            selectedClipId = clip.id
+            selectedClipMuted = clip.isMuted
             offsetSeekBar.progress = recordingOffsetMs / 100
 
             updateTrackLabels()
@@ -738,6 +741,7 @@ class EditorActivity : Activity() {
                     updateReadyState()
                 },
                 onFinished = {
+                        selectedClipId?.let(finishedClipIds::add)
                     // Original audio controls the end
                     // of a two-track preview.
                 }
@@ -812,14 +816,57 @@ class EditorActivity : Activity() {
     private fun updateReadyState() {
         val ready =
             (originalUri == null || originalReady) &&
-            (recordingFile == null || recordingReady)
+            (recordingFile == null || recordingReady) &&
+                extraClipPlayers.all { it.ready }
 
         refreshTimelineDuration()
 
         if (ready) {
             playbackStatus.setText(R.string.status_ready)
         }
+        // Prepare the other recordings in the same project.
+        val project = projectStore.getById(projectId)
+project?.clips
+    ?.filter { clip ->
+        clip.id != selectedClipId &&
+            File(clip.filePath).exists()
+    }
+    ?.forEach { clip ->
 
+        val audioFile = File(clip.filePath)
+
+        val player = createPlayer(
+            configure = { mediaPlayer ->
+                mediaPlayer.setDataSource(
+                    audioFile.absolutePath
+                )
+            },
+            onReady = {
+                val entry = extraClipPlayers
+                    .firstOrNull { it.clipId == clip.id }
+
+                if (entry != null) {
+                    entry.ready = true
+                    updateReadyState()
+                }
+            },
+            onFinished = {
+                finishedClipIds.add(clip.id)
+            }
+        )
+
+        if (player != null) {
+            extraClipPlayers.add(
+                ExtraClipPlayer(
+                    clipId = clip.id,
+                    offsetMs = clip.offsetMs
+                        .coerceAtLeast(0),
+                    muted = clip.isMuted,
+                    player = player
+                )
+            )
+        }
+    }
         updateControls()
     }
 
@@ -847,6 +894,7 @@ class EditorActivity : Activity() {
         if (playheadMs >= timelineDurationMs) {
             playheadMs = 0
         }
+        finishedClipIds.clear()
 
         try {
             val originalGain = originalVolume.progress / 100f
@@ -854,7 +902,12 @@ class EditorActivity : Activity() {
 
             originalPlayer?.setVolume(originalGain, originalGain)
             recordingPlayer?.setVolume(recordingGain, recordingGain)
-
+extraClipPlayers.forEach { entry ->
+    entry.player.setVolume(
+        recordingGain,
+        recordingGain
+    )
+}
             // Prepare the original player at the
             // selected global timeline position.
             originalPlayer?.takeIf { originalReady }?.let {
@@ -889,34 +942,73 @@ class EditorActivity : Activity() {
         }
     }
 
-    private fun startRecordingLayerIfDue() {
-        if (!recordingReady) return
 
-        val player = recordingPlayer ?: return
-        val relativePosition = playheadMs - recordingOffsetMs
+private fun startRecordingLayerIfDue() {
 
-        if (relativePosition < 0 || relativePosition >= player.duration) {
+    fun startLayer(
+        player: MediaPlayer,
+        offsetMs: Int,
+        clipId: String,
+        muted: Boolean
+    ) {
+        if (muted || clipId in finishedClipIds) {
+            return
+        }
+
+        val position = playheadMs - offsetMs
+
+        if (position < 0 || position >= player.duration) {
             return
         }
 
         try {
             if (!player.isPlaying) {
                 player.seekTo(
-                    relativePosition.toLong(),
+                    position.toLong(),
                     MediaPlayer.SEEK_CLOSEST
                 )
 
-                player.setVolume(
-                    recordingVolume.progress / 100f,
+                val volume =
                     recordingVolume.progress / 100f
-                )
 
+                player.setVolume(volume, volume)
                 player.start()
             }
         } catch (_: IllegalStateException) {
-            playbackStatus.setText(R.string.status_error)
+            playbackStatus.setText(
+                R.string.status_error
+            )
         }
     }
+
+    // Selected recording.
+    if (recordingReady) {
+        val player = recordingPlayer
+        val id = selectedClipId
+
+        if (player != null && id != null) {
+            startLayer(
+                player = player,
+                offsetMs = recordingOffsetMs,
+                clipId = id,
+                muted = selectedClipMuted
+            )
+        }
+    }
+
+    // All other recordings.
+    extraClipPlayers.forEach { entry ->
+        if (entry.ready) {
+            startLayer(
+                player = entry.player,
+                offsetMs = entry.offsetMs,
+                clipId = entry.clipId,
+                muted = entry.muted
+            )
+        }
+    }
+}
+
 
     private fun pausePlayback() {
         timelineHandler.removeCallbacks(timelineTicker)
@@ -935,6 +1027,11 @@ class EditorActivity : Activity() {
             if (recordingPlayer?.isPlaying == true) {
                 recordingPlayer?.pause()
             }
+            extraClipPlayers.forEach { entry ->
+    if (entry.player.isPlaying) {
+        entry.player.pause()
+    }
+}
         } catch (_: IllegalStateException) {
             releasePlayers()
             playbackStatus.setText(R.string.status_error)
@@ -960,6 +1057,11 @@ class EditorActivity : Activity() {
             if (recordingPlayer?.isPlaying == true) {
                 recordingPlayer?.pause()
             }
+            extraClipPlayers.forEach { entry ->
+    if (entry.player.isPlaying) {
+        entry.player.pause()
+    }
+}
         } catch (_: IllegalStateException) {
             // Players are cleaned up on activity stop.
         }
@@ -978,6 +1080,12 @@ class EditorActivity : Activity() {
         timelineHandler.removeCallbacks(timelineTicker)
         val oldOriginal = originalPlayer
         val oldRecording = recordingPlayer
+        extraClipPlayers.forEach { entry ->
+            entry.player.release()
+        }
+
+        extraClipPlayers.clear()
+        finishedClipIds.clear()
 
         originalPlayer = null
         recordingPlayer = null
@@ -1016,10 +1124,11 @@ class EditorActivity : Activity() {
         if (!::playPauseButton.isInitialized) return
 
         val recording = audioRecorder.isRecording
-        val hasAudio = originalPlayer != null || recordingPlayer != null
+        val hasAudio = originalPlayer != null || recordingPlayer != null || extraClipPlayers.isNotEmpty()
         val ready =
             (originalUri == null || originalReady) &&
-            (recordingFile == null || recordingReady)
+            (recordingFile == null || recordingReady) && 
+            extraClipPlayers.all { it.ready }
 
         importButton.isEnabled = !recording
         playPauseButton.isEnabled = !recording && hasAudio && ready
@@ -1053,38 +1162,48 @@ class EditorActivity : Activity() {
         }
     }
 
-    private fun refreshTimelineDuration() {
-        val originalDuration =
-            if (originalReady) {
-                originalPlayer?.duration ?: 0
-            } else {
-                0
-            }
 
-        val recordingDuration =
-            if (recordingReady) {
-                recordingPlayer?.duration ?: 0
-            } else {
-                0
-            }
-
-        timelineDurationMs = maxOf(
-            originalDuration,
-            if (recordingReady) {
-                recordingOffsetMs + recordingDuration
-            } else {
-                0
-            }
-        ).coerceAtLeast(0)
-
-        playheadMs = playheadMs.coerceIn(0, timelineDurationMs)
-
-        if (::timelineSeekBar.isInitialized) {
-            timelineSeekBar.max = (timelineDurationMs + 99) / 100
+private fun refreshTimelineDuration() {
+    val originalDuration =
+        if (originalReady) {
+            originalPlayer?.duration ?: 0
+        } else {
+            0
         }
 
-        updateTimelineDisplay()
+    val selectedDuration =
+        if (recordingReady) {
+            recordingOffsetMs +
+                (recordingPlayer?.duration ?: 0)
+        } else {
+            0
+        }
+
+    val extraDuration = extraClipPlayers
+        .filter { it.ready }
+        .maxOfOrNull { entry ->
+            entry.offsetMs + entry.player.duration
+        } ?: 0
+
+    timelineDurationMs = maxOf(
+        originalDuration,
+        selectedDuration,
+        extraDuration
+    ).coerceAtLeast(0)
+
+    playheadMs = playheadMs.coerceIn(
+        0,
+        timelineDurationMs
+    )
+
+    if (::timelineSeekBar.isInitialized) {
+        timelineSeekBar.max =
+            (timelineDurationMs + 99) / 100
     }
+
+    updateTimelineDisplay()
+}
+
 
     private fun formatTime(milliseconds: Int): String {
         val totalSeconds = milliseconds / 1000
@@ -1127,7 +1246,7 @@ class EditorActivity : Activity() {
 
         playheadMs = positionMs.coerceIn(0, timelineDurationMs)
         isPaused = true
-
+        finishedClipIds.clear()
         try {
             originalPlayer?.takeIf { originalReady }?.let {
                 it.seekTo(
@@ -1145,6 +1264,18 @@ class EditorActivity : Activity() {
                     MediaPlayer.SEEK_CLOSEST
                 )
             }
+            extraClipPlayers.forEach { entry ->
+    if (entry.ready) {
+        val relativePosition =
+            (playheadMs - entry.offsetMs)
+                .coerceIn(0, entry.player.duration)
+
+        entry.player.seekTo(
+            relativePosition.toLong(),
+            MediaPlayer.SEEK_CLOSEST
+        )
+    }
+}
         } catch (_: IllegalStateException) {
             playbackStatus.setText(R.string.status_error)
         }
@@ -1172,6 +1303,8 @@ class EditorActivity : Activity() {
             if (file != null) {
                 saveNewRecording(file)
                 recordingFile = file
+                selectedClipId = clip.id
+                selectedClipMuted = false
 
                 try {
                     projectStore.update(
