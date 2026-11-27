@@ -215,6 +215,7 @@ class EditorActivity : Activity() {
                             recordingOffsetMs = progress * 100
                             refreshTimelineDuration()
                             updateTimelineDisplay()
+                            refreshVisualTimeline()
                         }
                     }
 
