@@ -336,6 +336,18 @@ class EditorActivity : Activity() {
         }
     }
 
+    private fun applyAllRecordingVolumes() {
+        val project = projectStore.getById(projectId)
+            ?: return
+
+        project.clips.forEach { clip ->
+            applyClipVolumePreview(
+                clip.id,
+                clip.volume
+            )
+        }
+    }
+
     private fun saveNewRecording(file: File): Boolean {
         val clip = RecordingClip(
             id = UUID.randomUUID().toString(),
