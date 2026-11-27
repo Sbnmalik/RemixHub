@@ -89,6 +89,8 @@ class ProjectStore(context: Context) {
                         put("filePath", clip.filePath)
                         put("offsetMs", clip.offsetMs)
                         put("isMuted", clip.isMuted)
+                        put("name", clip.name)
+                        put("volume", clip.volume)
                     }
                 )
             }
