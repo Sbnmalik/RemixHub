@@ -340,11 +340,18 @@ class EditorActivity : Activity() {
     }
 
     private fun saveNewRecording(file: File): Boolean {
+        val nextNumber = (
+    projectStore.getById(projectId)
+        ?.clips
+        ?.size ?: 0
+) + 1
         val clip =
                 RecordingClip(
                         id = UUID.randomUUID().toString(),
                         filePath = file.absolutePath,
                         offsetMs = 0
+                        name = "Recording $nextNumber",
+                        volume = 100,
                 )
 
         return try {
@@ -738,10 +745,14 @@ class EditorActivity : Activity() {
 
         val exportClips =
                 includedClips.map { clip ->
+                    val clipGain = clip.volume
+                    .coerceIn(0, 100) / 100f
+                    val effectiveGain = recordingGain * clipGain
+
                     WavMixExporter.MixClip(
                             uri = Uri.fromFile(File(clip.filePath)),
                             offsetMs = clip.offsetMs,
-                            volume = recordingGain
+                            volume = effectiveGain
                     )
                 }
 

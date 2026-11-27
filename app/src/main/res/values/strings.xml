@@ -59,6 +59,7 @@
     <string name="recording_clips_empty">No recordings yet</string>
     <string name="clip_save_error">Unable to save recording clip.</string>
 
+
     <string name="clip_volume">Clip Volume</string>
     <string name="clip_volume_percent">Volume: %1$d%%</string>
     <string name="clip_rename">Rename</string>
