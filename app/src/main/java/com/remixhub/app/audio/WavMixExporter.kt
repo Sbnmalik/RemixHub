@@ -29,6 +29,19 @@ class WavMixExporter(
         private const val TIMEOUT_US = 10000L
     }
 
+    data class MixClip(
+        val uri: Uri,
+        val offsetMs: Int,
+        val volume: Float
+    )
+
+    private class DecodedClip(
+        val track: DecodedTrack,
+        val offsetFrames: Int,
+        val offsetSec: Double,
+        val gain: Double
+    )
+
     private class DecodedTrack(
         val pcm: ByteArray,
         val sampleRate: Int,
@@ -76,25 +89,30 @@ class WavMixExporter(
         clips: List<MixClip>,
         destination: OutputStream
     ) {
-        require(originalUri != null || recordingUri != null) {
+        require(originalUri != null || clips.isNotEmpty()) {
             "There is no audio to export."
         }
 
         val original = originalUri?.let(::decode)
-        val recording = recordingUri?.let(::decode)
+        val decodedClips = clips.map { clip ->
+            val clampedOffsetMs = clip.offsetMs.coerceIn(0, MAX_SECONDS * 1000)
+            DecodedClip(
+                track = decode(clip.uri),
+                offsetFrames = (clampedOffsetMs.toLong() * SAMPLE_RATE / 1000).toInt(),
+                offsetSec = clampedOffsetMs / 1000.0,
+                gain = clip.volume.coerceIn(0f, 1f).toDouble()
+            )
+        }
 
-        val clampedOffsetMs = recordingOffsetMs.coerceIn(0, 30000)
-        val offsetFrames = (clampedOffsetMs.toLong() * SAMPLE_RATE / 1000).toInt()
+        val longestClipFrames = decodedClips.maxOfOrNull { clip ->
+            clip.track.durationFrames() + clip.offsetFrames
+        } ?: 0
 
         val totalFrames = min(
             MAX_FRAMES,
             max(
                 original?.durationFrames() ?: 0,
-                if (recording != null) {
-                    recording.durationFrames() + offsetFrames
-                } else {
-                    0
-                }
+                longestClipFrames
             )
         )
 
@@ -108,8 +126,6 @@ class WavMixExporter(
         writeWavHeader(out, dataSize)
 
         val originalGain = originalVolume.coerceIn(0f, 1f).toDouble()
-        val recordingGain = recordingVolume.coerceIn(0f, 1f).toDouble()
-        val recordingOffsetSec = clampedOffsetMs / 1000.0
 
         // Process small chunks instead of allocating
         // an additional full-length output array.
@@ -124,13 +140,18 @@ class WavMixExporter(
 
             for (i in 0 until count) {
                 val time = (frame + i).toDouble() / SAMPLE_RATE
-                val recordingTime = time - recordingOffsetSec
 
                 for (channel in 0 until CHANNELS) {
-                    val first = original?.sampleAt(time, channel) ?: 0.0
-                    val second = recording?.sampleAt(recordingTime, channel) ?: 0.0
+                    var sum = (original?.sampleAt(time, channel) ?: 0.0) * originalGain
 
-                    val mixed = (first * originalGain + second * recordingGain)
+                    for (clip in decodedClips) {
+                        val clipTime = time - clip.offsetSec
+                        if (clipTime >= 0.0) {
+                            sum += clip.track.sampleAt(clipTime, channel) * clip.gain
+                        }
+                    }
+
+                    val mixed = sum
                         .roundToInt()
                         .coerceIn(
                             Short.MIN_VALUE.toInt(),

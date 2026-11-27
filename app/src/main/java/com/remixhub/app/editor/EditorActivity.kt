@@ -36,12 +36,13 @@ class EditorActivity : Activity() {
         private const val STATE_AUDIO_URI = "audio_uri"
         private const val STATE_RECORDING_PATH = "recording_path"
     }
+
     private data class ExtraClipPlayer(
-    val clipId: String,
-    val offsetMs: Int,
-    val muted: Boolean,
-    val player: MediaPlayer,
-    var ready: Boolean = false
+        val clipId: String,
+        val offsetMs: Int,
+        val muted: Boolean,
+        val player: MediaPlayer,
+        var ready: Boolean = false
     )
 
     private lateinit var exportButton: Button
@@ -83,9 +84,7 @@ class EditorActivity : Activity() {
     private lateinit var originalVolume: SeekBar
     private lateinit var recordingVolume: SeekBar
 
-    private val extraClipPlayers =
-    mutableListOf<ExtraClipPlayer>()
-
+    private val extraClipPlayers = mutableListOf<ExtraClipPlayer>()
     private val finishedClipIds = mutableSetOf<String>()
 
     private var selectedClipId: String? = null
@@ -139,18 +138,9 @@ class EditorActivity : Activity() {
         val selectedClip = project.clips.firstOrNull {
             it.id == project.activeClipId
         } ?: project.clips.firstOrNull()
+
         selectedClipId = selectedClip?.id
         selectedClipMuted = selectedClip?.isMuted ?: false
-
-        recordingFile = selectedClip
-            ?.filePath
-            ?.let(::File)
-            ?.takeIf { it.exists() }
-
-        recordingOffsetMs = selectedClip
-            ?.offsetMs
-            ?.coerceIn(0, 30000)
-            ?: project.recordingOffsetMs.coerceIn(0, 30000)
 
         trackName = findViewById(R.id.textTrackName)
         recordingName = findViewById(R.id.textRecordingName)
@@ -170,13 +160,14 @@ class EditorActivity : Activity() {
 
         originalUri = project.originalUri?.let(Uri::parse)
 
-        recordingFile = project.recordingPath
+        recordingFile = (selectedClip?.filePath ?: project.recordingPath)
             ?.let(::File)
             ?.takeIf { it.exists() }
 
         originalVolume.progress = project.originalVolume.coerceIn(0, 100)
         recordingVolume.progress = project.recordingVolume.coerceIn(0, 100)
-        recordingOffsetMs = project.recordingOffsetMs.coerceIn(0, 30000)
+        recordingOffsetMs = (selectedClip?.offsetMs ?: project.recordingOffsetMs)
+            .coerceIn(0, 30000)
 
         findViewById<TextView>(R.id.textBack).setOnClickListener {
             finish()
@@ -207,6 +198,9 @@ class EditorActivity : Activity() {
         recordingVolume.setOnSeekBarChangeListener(
             volumeListener { volume ->
                 recordingPlayer?.setVolume(volume, volume)
+                extraClipPlayers.forEach { entry ->
+                    entry.player.setVolume(volume, volume)
+                }
             }
         )
 
@@ -295,9 +289,11 @@ class EditorActivity : Activity() {
             for (index in 0 until clipContainer.childCount) {
                 val button = clipContainer.getChildAt(index) as? Button
                 if (button != null) {
+                    val path = button.tag as? String
                     button.isEnabled =
-                        !audioRecorder.isRecording && !exporting &&
-                        !button.text.contains("(Missing file)")
+                        !audioRecorder.isRecording &&
+                        !exporting &&
+                        (path == null || File(path).exists())
                 }
             }
         }
@@ -325,6 +321,8 @@ class EditorActivity : Activity() {
 
             recordingFile = file
             recordingOffsetMs = 0
+            selectedClipId = clip.id
+            selectedClipMuted = false
             offsetSeekBar.progress = 0
 
             updateTrackLabels()
@@ -358,7 +356,32 @@ class EditorActivity : Activity() {
             val selected = clip.id == project.activeClipId
             val available = File(clip.filePath).exists()
 
+            val muteButton = Button(this).apply {
+                text = if (clip.isMuted) {
+                    "Unmute Recording ${index + 1}"
+                } else {
+                    "Mute Recording ${index + 1}"
+                }
+
+                isAllCaps = false
+                tag = clip.filePath
+                isEnabled = available && !audioRecorder.isRecording && !exporting
+
+                setTextColor(getColor(R.color.black))
+
+                backgroundTintList = ColorStateList.valueOf(
+                    getColor(R.color.light_gray)
+                )
+
+                setOnClickListener {
+                    toggleClipMute(clip.id)
+                }
+            }
+
+            clipContainer.addView(muteButton)
+
             val button = Button(this).apply {
+                tag = clip.filePath
                 text = buildString {
                     append(
                         getString(
@@ -579,50 +602,35 @@ class EditorActivity : Activity() {
     private fun exportMix(destinationUri: Uri) {
         if (exporting || audioRecorder.isRecording) return
 
+        val sourceOriginal = originalUri
+        val project = projectStore.getById(projectId)
 
-val sourceOriginal = originalUri
+        if (project == null) {
+            playbackStatus.text = "Project not found."
+            return
+        }
 
-val project = projectStore.getById(projectId)
+        val recordingGain = recordingVolume.progress / 100f
+        val originalGain = originalVolume.progress / 100f
 
-if (project == null) {
-    playbackStatus.text = "Project not found."
-    return
-}
+        val includedClips = project.clips.filter { !it.isMuted }
+        val missingClips = includedClips.filter { !File(it.filePath).exists() }
 
-val recordingGain = recordingVolume.progress / 100f
-val originalGain = originalVolume.progress / 100f
+        if (missingClips.isNotEmpty()) {
+            playbackStatus.text = "Export failed: a recording file is missing."
+            return
+        }
 
-val includedClips = project.clips.filter {
-    !it.isMuted
-}
+        val exportClips = includedClips.map { clip ->
+            WavMixExporter.MixClip(
+                uri = Uri.fromFile(File(clip.filePath)),
+                offsetMs = clip.offsetMs,
+                volume = recordingGain
+            )
+        }
 
-val missingClips = includedClips.filter {
-    !File(it.filePath).exists()
-}
-
-if (missingClips.isNotEmpty()) {
-    playbackStatus.text =
-        "Export failed: a recording file is missing."
-    return
-}
-
-val exportClips = includedClips.map { clip ->
-    WavMixExporter.MixClip(
-        uri = Uri.fromFile(File(clip.filePath)),
-        offsetMs = clip.offsetMs,
-        volume = recordingGain
-    )
-}
-
-if (sourceOriginal == null && exportClips.isEmpty()) {
-    playbackStatus.text =
-        "No unmuted audio available to export."
-    return
-}
-
-
-        if (sourceOriginal == null && sourceRecording == null) {
-            playbackStatus.text = "No audio available to export."
+        if (sourceOriginal == null && exportClips.isEmpty()) {
+            playbackStatus.text = "No unmuted audio available to export."
             return
         }
 
@@ -755,7 +763,12 @@ if (sourceOriginal == null && exportClips.isEmpty()) {
         playheadMs = 0
         updateControls()
 
-        if (originalUri == null && recordingFile == null) {
+        val project = projectStore.getById(projectId)
+        val extraClips = project?.clips?.filter { clip ->
+            clip.id != selectedClipId && File(clip.filePath).exists()
+        }.orEmpty()
+
+        if (originalUri == null && recordingFile == null && extraClips.isEmpty()) {
             playbackStatus.setText(R.string.status_empty)
             return
         }
@@ -772,7 +785,6 @@ if (sourceOriginal == null && exportClips.isEmpty()) {
                     updateReadyState()
                 },
                 onFinished = {
-                        selectedClipId?.let(finishedClipIds::add)
                     // Original audio controls the end
                     // of a two-track preview.
                 }
@@ -790,7 +802,38 @@ if (sourceOriginal == null && exportClips.isEmpty()) {
                         updateReadyState()
                     },
                     onFinished = {
+                        selectedClipId?.let(finishedClipIds::add)
                     }
+                )
+            }
+        }
+
+        extraClips.forEach { clip ->
+            val audioFile = File(clip.filePath)
+            val player = createPlayer(
+                configure = { mediaPlayer ->
+                    mediaPlayer.setDataSource(audioFile.absolutePath)
+                },
+                onReady = {
+                    val entry = extraClipPlayers.firstOrNull { it.clipId == clip.id }
+                    if (entry != null) {
+                        entry.ready = true
+                        updateReadyState()
+                    }
+                },
+                onFinished = {
+                    finishedClipIds.add(clip.id)
+                }
+            )
+
+            if (player != null) {
+                extraClipPlayers.add(
+                    ExtraClipPlayer(
+                        clipId = clip.id,
+                        offsetMs = clip.offsetMs.coerceAtLeast(0),
+                        muted = clip.isMuted,
+                        player = player
+                    )
                 )
             }
         }
@@ -799,7 +842,7 @@ if (sourceOriginal == null && exportClips.isEmpty()) {
         exportButton.isEnabled =
             !audioRecorder.isRecording &&
             !exporting &&
-            (originalUri != null || recordingFile != null)
+            (originalUri != null || recordingFile != null || extraClipPlayers.isNotEmpty())
     }
 
     private fun createPlayer(
@@ -848,56 +891,14 @@ if (sourceOriginal == null && exportClips.isEmpty()) {
         val ready =
             (originalUri == null || originalReady) &&
             (recordingFile == null || recordingReady) &&
-                extraClipPlayers.all { it.ready }
+            extraClipPlayers.all { it.ready }
 
         refreshTimelineDuration()
 
         if (ready) {
             playbackStatus.setText(R.string.status_ready)
         }
-        // Prepare the other recordings in the same project.
-        val project = projectStore.getById(projectId)
-project?.clips
-    ?.filter { clip ->
-        clip.id != selectedClipId &&
-            File(clip.filePath).exists()
-    }
-    ?.forEach { clip ->
 
-        val audioFile = File(clip.filePath)
-
-        val player = createPlayer(
-            configure = { mediaPlayer ->
-                mediaPlayer.setDataSource(
-                    audioFile.absolutePath
-                )
-            },
-            onReady = {
-                val entry = extraClipPlayers
-                    .firstOrNull { it.clipId == clip.id }
-
-                if (entry != null) {
-                    entry.ready = true
-                    updateReadyState()
-                }
-            },
-            onFinished = {
-                finishedClipIds.add(clip.id)
-            }
-        )
-
-        if (player != null) {
-            extraClipPlayers.add(
-                ExtraClipPlayer(
-                    clipId = clip.id,
-                    offsetMs = clip.offsetMs
-                        .coerceAtLeast(0),
-                    muted = clip.isMuted,
-                    player = player
-                )
-            )
-        }
-    }
         updateControls()
     }
 
@@ -916,7 +917,8 @@ project?.clips
 
         val ready =
             (originalUri == null || originalReady) &&
-            (recordingFile == null || recordingReady)
+            (recordingFile == null || recordingReady) &&
+            extraClipPlayers.all { it.ready }
 
         if (!ready || timelineDurationMs <= 0) return
 
@@ -933,12 +935,10 @@ project?.clips
 
             originalPlayer?.setVolume(originalGain, originalGain)
             recordingPlayer?.setVolume(recordingGain, recordingGain)
-extraClipPlayers.forEach { entry ->
-    entry.player.setVolume(
-        recordingGain,
-        recordingGain
-    )
-}
+            extraClipPlayers.forEach { entry ->
+                entry.player.setVolume(recordingGain, recordingGain)
+            }
+
             // Prepare the original player at the
             // selected global timeline position.
             originalPlayer?.takeIf { originalReady }?.let {
@@ -973,73 +973,99 @@ extraClipPlayers.forEach { entry ->
         }
     }
 
-
-private fun startRecordingLayerIfDue() {
-
-    fun startLayer(
-        player: MediaPlayer,
-        offsetMs: Int,
-        clipId: String,
-        muted: Boolean
-    ) {
-        if (muted || clipId in finishedClipIds) {
-            return
-        }
-
-        val position = playheadMs - offsetMs
-
-        if (position < 0 || position >= player.duration) {
-            return
-        }
+    private fun toggleClipMute(clipId: String) {
+        if (audioRecorder.isRecording || exporting) return
 
         try {
-            if (!player.isPlaying) {
-                player.seekTo(
-                    position.toLong(),
-                    MediaPlayer.SEEK_CLOSEST
+            projectStore.update(
+                projectId,
+                "Recording mute setting changed"
+            ) { project ->
+                project.copy(
+                    clips = project.clips.map { clip ->
+                        if (clip.id == clipId) {
+                            clip.copy(isMuted = !clip.isMuted)
+                        } else {
+                            clip
+                        }
+                    }
                 )
-
-                val volume =
-                    recordingVolume.progress / 100f
-
-                player.setVolume(volume, volume)
-                player.start()
             }
-        } catch (_: IllegalStateException) {
-            playbackStatus.setText(
-                R.string.status_error
-            )
+
+            val project = projectStore.getById(projectId)
+
+            selectedClipMuted = project?.clips
+                ?.firstOrNull { it.id == selectedClipId }
+                ?.isMuted ?: false
+
+            // Rebuild the players with the new mute state.
+            preparePlayers()
+            displayRecordingClips()
+        } catch (_: Exception) {
+            playbackStatus.text = "Unable to update recording mute setting."
         }
     }
 
-    // Selected recording.
-    if (recordingReady) {
-        val player = recordingPlayer
-        val id = selectedClipId
+    private fun startRecordingLayerIfDue() {
+        fun startLayer(
+            player: MediaPlayer,
+            offsetMs: Int,
+            clipId: String,
+            muted: Boolean
+        ) {
+            if (muted || clipId in finishedClipIds) {
+                return
+            }
 
-        if (player != null && id != null) {
-            startLayer(
-                player = player,
-                offsetMs = recordingOffsetMs,
-                clipId = id,
-                muted = selectedClipMuted
-            )
+            val position = playheadMs - offsetMs
+
+            if (position < 0 || position >= player.duration) {
+                return
+            }
+
+            try {
+                if (!player.isPlaying) {
+                    player.seekTo(
+                        position.toLong(),
+                        MediaPlayer.SEEK_CLOSEST
+                    )
+
+                    val volume = recordingVolume.progress / 100f
+                    player.setVolume(volume, volume)
+                    player.start()
+                }
+            } catch (_: IllegalStateException) {
+                playbackStatus.setText(R.string.status_error)
+            }
+        }
+
+        // Selected recording.
+        if (recordingReady) {
+            val player = recordingPlayer
+            val id = selectedClipId
+
+            if (player != null && id != null) {
+                startLayer(
+                    player = player,
+                    offsetMs = recordingOffsetMs,
+                    clipId = id,
+                    muted = selectedClipMuted
+                )
+            }
+        }
+
+        // All other recordings.
+        extraClipPlayers.forEach { entry ->
+            if (entry.ready) {
+                startLayer(
+                    player = entry.player,
+                    offsetMs = entry.offsetMs,
+                    clipId = entry.clipId,
+                    muted = entry.muted
+                )
+            }
         }
     }
-
-    // All other recordings.
-    extraClipPlayers.forEach { entry ->
-        if (entry.ready) {
-            startLayer(
-                player = entry.player,
-                offsetMs = entry.offsetMs,
-                clipId = entry.clipId,
-                muted = entry.muted
-            )
-        }
-    }
-}
-
 
     private fun pausePlayback() {
         timelineHandler.removeCallbacks(timelineTicker)
@@ -1058,11 +1084,12 @@ private fun startRecordingLayerIfDue() {
             if (recordingPlayer?.isPlaying == true) {
                 recordingPlayer?.pause()
             }
+
             extraClipPlayers.forEach { entry ->
-    if (entry.player.isPlaying) {
-        entry.player.pause()
-    }
-}
+                if (entry.player.isPlaying) {
+                    entry.player.pause()
+                }
+            }
         } catch (_: IllegalStateException) {
             releasePlayers()
             playbackStatus.setText(R.string.status_error)
@@ -1088,11 +1115,12 @@ private fun startRecordingLayerIfDue() {
             if (recordingPlayer?.isPlaying == true) {
                 recordingPlayer?.pause()
             }
+
             extraClipPlayers.forEach { entry ->
-    if (entry.player.isPlaying) {
-        entry.player.pause()
-    }
-}
+                if (entry.player.isPlaying) {
+                    entry.player.pause()
+                }
+            }
         } catch (_: IllegalStateException) {
             // Players are cleaned up on activity stop.
         }
@@ -1111,10 +1139,10 @@ private fun startRecordingLayerIfDue() {
         timelineHandler.removeCallbacks(timelineTicker)
         val oldOriginal = originalPlayer
         val oldRecording = recordingPlayer
+
         extraClipPlayers.forEach { entry ->
             entry.player.release()
         }
-
         extraClipPlayers.clear()
         finishedClipIds.clear()
 
@@ -1155,10 +1183,13 @@ private fun startRecordingLayerIfDue() {
         if (!::playPauseButton.isInitialized) return
 
         val recording = audioRecorder.isRecording
-        val hasAudio = originalPlayer != null || recordingPlayer != null || extraClipPlayers.isNotEmpty()
+        val hasAudio =
+            originalPlayer != null ||
+            recordingPlayer != null ||
+            extraClipPlayers.isNotEmpty()
         val ready =
             (originalUri == null || originalReady) &&
-            (recordingFile == null || recordingReady) && 
+            (recordingFile == null || recordingReady) &&
             extraClipPlayers.all { it.ready }
 
         importButton.isEnabled = !recording
@@ -1193,48 +1224,41 @@ private fun startRecordingLayerIfDue() {
         }
     }
 
+    private fun refreshTimelineDuration() {
+        val originalDuration =
+            if (originalReady) {
+                originalPlayer?.duration ?: 0
+            } else {
+                0
+            }
 
-private fun refreshTimelineDuration() {
-    val originalDuration =
-        if (originalReady) {
-            originalPlayer?.duration ?: 0
-        } else {
-            0
+        val selectedDuration =
+            if (recordingReady) {
+                recordingOffsetMs + (recordingPlayer?.duration ?: 0)
+            } else {
+                0
+            }
+
+        val extraDuration = extraClipPlayers
+            .filter { it.ready }
+            .maxOfOrNull { entry ->
+                entry.offsetMs + entry.player.duration
+            } ?: 0
+
+        timelineDurationMs = maxOf(
+            originalDuration,
+            selectedDuration,
+            extraDuration
+        ).coerceAtLeast(0)
+
+        playheadMs = playheadMs.coerceIn(0, timelineDurationMs)
+
+        if (::timelineSeekBar.isInitialized) {
+            timelineSeekBar.max = (timelineDurationMs + 99) / 100
         }
 
-    val selectedDuration =
-        if (recordingReady) {
-            recordingOffsetMs +
-                (recordingPlayer?.duration ?: 0)
-        } else {
-            0
-        }
-
-    val extraDuration = extraClipPlayers
-        .filter { it.ready }
-        .maxOfOrNull { entry ->
-            entry.offsetMs + entry.player.duration
-        } ?: 0
-
-    timelineDurationMs = maxOf(
-        originalDuration,
-        selectedDuration,
-        extraDuration
-    ).coerceAtLeast(0)
-
-    playheadMs = playheadMs.coerceIn(
-        0,
-        timelineDurationMs
-    )
-
-    if (::timelineSeekBar.isInitialized) {
-        timelineSeekBar.max =
-            (timelineDurationMs + 99) / 100
+        updateTimelineDisplay()
     }
-
-    updateTimelineDisplay()
-}
-
 
     private fun formatTime(milliseconds: Int): String {
         val totalSeconds = milliseconds / 1000
@@ -1278,6 +1302,7 @@ private fun refreshTimelineDuration() {
         playheadMs = positionMs.coerceIn(0, timelineDurationMs)
         isPaused = true
         finishedClipIds.clear()
+
         try {
             originalPlayer?.takeIf { originalReady }?.let {
                 it.seekTo(
@@ -1295,18 +1320,18 @@ private fun refreshTimelineDuration() {
                     MediaPlayer.SEEK_CLOSEST
                 )
             }
-            extraClipPlayers.forEach { entry ->
-    if (entry.ready) {
-        val relativePosition =
-            (playheadMs - entry.offsetMs)
-                .coerceIn(0, entry.player.duration)
 
-        entry.player.seekTo(
-            relativePosition.toLong(),
-            MediaPlayer.SEEK_CLOSEST
-        )
-    }
-}
+            extraClipPlayers.forEach { entry ->
+                if (entry.ready) {
+                    val relativePosition =
+                        (playheadMs - entry.offsetMs).coerceIn(0, entry.player.duration)
+
+                    entry.player.seekTo(
+                        relativePosition.toLong(),
+                        MediaPlayer.SEEK_CLOSEST
+                    )
+                }
+            }
         } catch (_: IllegalStateException) {
             playbackStatus.setText(R.string.status_error)
         }
@@ -1334,8 +1359,6 @@ private fun refreshTimelineDuration() {
             if (file != null) {
                 saveNewRecording(file)
                 recordingFile = file
-                selectedClipId = clip.id
-                selectedClipMuted = false
 
                 try {
                     projectStore.update(
