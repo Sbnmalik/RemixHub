@@ -1638,6 +1638,55 @@ private fun moveClipOnTimeline(
     }
 }
 
+private fun refreshVisualTimeline() {
+    if (!::visualTimeline.isInitialized) return
+
+    val project = projectStore.getById(projectId)
+        ?: return
+
+    val originalDuration =
+        if (originalReady) {
+            originalPlayer?.duration ?: 0
+        } else {
+            0
+        }
+
+    val bars = project.clips.map { clip ->
+        val duration = when (clip.id) {
+            selectedClipId -> {
+                if (recordingReady) {
+                    recordingPlayer?.duration ?: 0
+                } else {
+                    0
+                }
+            }
+
+            else -> {
+                extraClipPlayers.firstOrNull {
+                    it.clipId == clip.id && it.ready
+                }?.player?.duration ?: 0
+            }
+        }
+
+        TimelineView.ClipBar(
+            id = clip.id,
+            name = clip.name,
+            offsetMs = clip.offsetMs,
+            durationMs = duration,
+            muted = clip.isMuted
+        )
+    }
+
+    visualTimeline.setTimeline(
+        originalDurationMs = originalDuration,
+        clips = bars,
+        selectedId = project.activeClipId,
+        durationMs = timelineDurationMs
+    )
+
+    visualTimeline.setPlayhead(playheadMs)
+}
+
     // ACTIVITY LIFECYCLE
 
     override fun onResume() {
