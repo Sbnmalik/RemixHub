@@ -579,19 +579,52 @@ class EditorActivity : Activity() {
     private fun exportMix(destinationUri: Uri) {
         if (exporting || audioRecorder.isRecording) return
 
-        val sourceOriginal = originalUri
-        val sourceRecording = recordingFile
-            ?.takeIf { it.exists() }
-            ?.let(Uri::fromFile)
+
+val sourceOriginal = originalUri
+
+val project = projectStore.getById(projectId)
+
+if (project == null) {
+    playbackStatus.text = "Project not found."
+    return
+}
+
+val recordingGain = recordingVolume.progress / 100f
+val originalGain = originalVolume.progress / 100f
+
+val includedClips = project.clips.filter {
+    !it.isMuted
+}
+
+val missingClips = includedClips.filter {
+    !File(it.filePath).exists()
+}
+
+if (missingClips.isNotEmpty()) {
+    playbackStatus.text =
+        "Export failed: a recording file is missing."
+    return
+}
+
+val exportClips = includedClips.map { clip ->
+    WavMixExporter.MixClip(
+        uri = Uri.fromFile(File(clip.filePath)),
+        offsetMs = clip.offsetMs,
+        volume = recordingGain
+    )
+}
+
+if (sourceOriginal == null && exportClips.isEmpty()) {
+    playbackStatus.text =
+        "No unmuted audio available to export."
+    return
+}
+
 
         if (sourceOriginal == null && sourceRecording == null) {
             playbackStatus.text = "No audio available to export."
             return
         }
-
-        val originalGain = originalVolume.progress / 100f
-        val recordingGain = recordingVolume.progress / 100f
-        val exportOffsetMs = recordingOffsetMs
 
         exporting = true
         playbackStatus.setText(R.string.status_exporting)
@@ -612,10 +645,8 @@ class EditorActivity : Activity() {
                     val exporter = WavMixExporter(applicationContext)
                     exporter.export(
                         originalUri = sourceOriginal,
-                        recordingUri = sourceRecording,
                         originalVolume = originalGain,
-                        recordingVolume = recordingGain,
-                        recordingOffsetMs = exportOffsetMs,
+                        clips = exportClips,
                         destination = it
                     )
                 }

@@ -72,10 +72,8 @@ class WavMixExporter(
 
     fun export(
         originalUri: Uri?,
-        recordingUri: Uri?,
         originalVolume: Float,
-        recordingVolume: Float,
-        recordingOffsetMs: Int,
+        clips: List<MixClip>,
         destination: OutputStream
     ) {
         require(originalUri != null || recordingUri != null) {
