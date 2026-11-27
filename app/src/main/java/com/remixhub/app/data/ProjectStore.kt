@@ -21,6 +21,40 @@ class ProjectStore(context: Context) {
             val historyArray = item.optJSONArray("history")
                 ?: JSONArray()
 
+val clipsArray = item.optJSONArray("clips")
+
+val clips = if (clipsArray != null) {
+    List(clipsArray.length()) { clipIndex ->
+        val clip = clipsArray.getJSONObject(clipIndex)
+
+        RecordingClip(
+            id = clip.getString("id"),
+            filePath = clip.getString("filePath"),
+            offsetMs = clip.optInt("offsetMs", 0)
+                .coerceAtLeast(0)
+        )
+    }
+} else {
+    // Convert older single-recording projects
+    // into our new in-memory clip representation.
+    val oldPath = item.optString("recordingPath", "")
+
+    if (oldPath.isNotBlank() && oldPath != "null") {
+        listOf(
+            RecordingClip(
+                id = "legacy",
+                filePath = oldPath,
+                offsetMs = item.optInt(
+                    "recordingOffsetMs", 0
+                )
+            )
+        )
+    } else {
+        emptyList()
+    }
+}
+``
+
             RemixProject(
                 id = item.getString("id"),
                 name = item.getString("name"),
@@ -38,6 +72,11 @@ class ProjectStore(context: Context) {
                 recordingOffsetMs = item.optInt(
                                 "recordingOffsetMs", 0
                         ),
+                        clips = clips,
+activeClipId = item.optString(
+    "activeClipId", ""
+).takeIf { it.isNotBlank() && it != "null" }
+    ?: clips.firstOrNull()?.id,
             )
         }
     }
@@ -46,6 +85,19 @@ class ProjectStore(context: Context) {
         val array = JSONArray()
 
         projects.forEach { project ->
+
+val clipsArray = JSONArray()
+
+project.clips.forEach { clip ->
+    clipsArray.put(
+        JSONObject().apply {
+            put("id", clip.id)
+            put("filePath", clip.filePath)
+            put("offsetMs", clip.offsetMs)
+        }
+    )
+}
+
             val historyArray = JSONArray()
             project.history.forEach { historyArray.put(it) }
 
@@ -60,6 +112,8 @@ class ProjectStore(context: Context) {
                 put("recordingVolume", project.recordingVolume)
                 put("history", historyArray)
                 put("recordingOffsetMs", project.recordingOffsetMs)
+                put("clips", clipsArray)
+                put("activeClipId", project.activeClipId)
             }
 
             array.put(item)
