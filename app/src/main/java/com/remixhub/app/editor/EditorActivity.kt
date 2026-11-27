@@ -21,7 +21,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import java.util.Locale
-
+import android.content.res.ColorStateList
+import android.widget.LinearLayout
+import com.remixhub.app.data.RecordingClip
+import java.util.UUID
 class EditorActivity : Activity() {
 
     companion object {
