@@ -18,8 +18,37 @@ class ProjectStore(context: Context) {
 
         return MutableList(array.length()) { index ->
             val item = array.getJSONObject(index)
-            val historyArray = item.optJSONArray("history")
-                ?: JSONArray()
+            val historyArray = item.optJSONArray("history") ?: JSONArray()
+            val clipsArray = item.optJSONArray("clips")
+
+            val clips = if (clipsArray != null) {
+                List(clipsArray.length()) { clipIndex ->
+                    val clip = clipsArray.getJSONObject(clipIndex)
+
+                    RecordingClip(
+                        id = clip.getString("id"),
+                        filePath = clip.getString("filePath"),
+                        offsetMs = clip.optInt("offsetMs", 0).coerceAtLeast(0),
+                        isMuted = clip.optBoolean("isMuted", false)
+                    )
+                }
+            } else {
+                // Convert older single-recording projects
+                // into our new in-memory clip representation.
+                val oldPath = item.optString("recordingPath", "")
+
+                if (oldPath.isNotBlank() && oldPath != "null") {
+                    listOf(
+                        RecordingClip(
+                            id = "legacy",
+                            filePath = oldPath,
+                            offsetMs = item.optInt("recordingOffsetMs", 0)
+                        )
+                    )
+                } else {
+                    emptyList()
+                }
+            }
 
             RemixProject(
                 id = item.getString("id"),
@@ -27,17 +56,19 @@ class ProjectStore(context: Context) {
                 createdAt = item.getLong("createdAt"),
                 updatedAt = item.getLong("updatedAt"),
                 originalUri = item.optString("originalUri")
-                    .takeIf { it.isNotEmpty() },
+                    .takeIf { it.isNotEmpty() && it != "null" },
                 recordingPath = item.optString("recordingPath")
-                    .takeIf { it.isNotEmpty() },
+                    .takeIf { it.isNotEmpty() && it != "null" },
                 originalVolume = item.optInt("originalVolume", 100),
                 recordingVolume = item.optInt("recordingVolume", 100),
                 history = List(historyArray.length()) {
                     historyArray.getString(it)
                 },
-                recordingOffsetMs = item.optInt(
-                                "recordingOffsetMs", 0
-                        ),
+                recordingOffsetMs = item.optInt("recordingOffsetMs", 0),
+                clips = clips,
+                activeClipId = item.optString("activeClipId", "")
+                    .takeIf { it.isNotBlank() && it != "null" }
+                    ?: clips.firstOrNull()?.id
             )
         }
     }
@@ -46,6 +77,18 @@ class ProjectStore(context: Context) {
         val array = JSONArray()
 
         projects.forEach { project ->
+            val clipsArray = JSONArray()
+            project.clips.forEach { clip ->
+                clipsArray.put(
+                    JSONObject().apply {
+                        put("id", clip.id)
+                        put("filePath", clip.filePath)
+                        put("offsetMs", clip.offsetMs)
+                        put("isMuted", clip.isMuted)
+                    }
+                )
+            }
+
             val historyArray = JSONArray()
             project.history.forEach { historyArray.put(it) }
 
@@ -60,6 +103,8 @@ class ProjectStore(context: Context) {
                 put("recordingVolume", project.recordingVolume)
                 put("history", historyArray)
                 put("recordingOffsetMs", project.recordingOffsetMs)
+                put("clips", clipsArray)
+                put("activeClipId", project.activeClipId)
             }
 
             array.put(item)
@@ -121,7 +166,6 @@ class ProjectStore(context: Context) {
                 current.history
             }
         )
-
         writeProjects(projects)
     }
 }

@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -27,6 +28,19 @@ class WavMixExporter(
         private const val MAX_FRAMES = SAMPLE_RATE * MAX_SECONDS
         private const val TIMEOUT_US = 10000L
     }
+
+    data class MixClip(
+        val uri: Uri,
+        val offsetMs: Int,
+        val volume: Float
+    )
+
+    private class DecodedClip(
+        val track: DecodedTrack,
+        val offsetFrames: Int,
+        val offsetSec: Double,
+        val gain: Double
+    )
 
     private class DecodedTrack(
         val pcm: ByteArray,
@@ -49,14 +63,10 @@ class WavMixExporter(
 
             val next = min(index + 1, frames - 1)
             val fraction = position - index
-
-            val actualChannel =
-                if (channels == 1) 0 else channel
+            val actualChannel = if (channels == 1) 0 else channel
 
             fun read(frame: Int): Double {
-                val offset =
-                    (frame * channels + actualChannel) * 2
-
+                val offset = (frame * channels + actualChannel) * 2
                 return buffer.getShort(offset).toDouble()
             }
 
@@ -67,45 +77,44 @@ class WavMixExporter(
         }
 
         fun durationFrames(): Int {
-            return kotlin.math.ceil(
+            return ceil(
                 frames.toDouble() * SAMPLE_RATE / sampleRate
             ).toInt()
         }
     }
 
-fun export(
-    originalUri: Uri?,
-    recordingUri: Uri?,
-    originalVolume: Float,
-    recordingVolume: Float,
-    recordingOffsetMs: Int,
-    destination: OutputStream
-) {
-        require(originalUri != null || recordingUri != null) {
+    fun export(
+        originalUri: Uri?,
+        originalVolume: Float,
+        clips: List<MixClip>,
+        destination: OutputStream
+    ) {
+        require(originalUri != null || clips.isNotEmpty()) {
             "There is no audio to export."
         }
 
         val original = originalUri?.let(::decode)
-        val recording = recordingUri?.let(::decode)
-
-
-val offsetFrames = (
-    recordingOffsetMs.coerceIn(0, 30000)
-        .toLong() * SAMPLE_RATE / 1000
-).toInt()
-
-val totalFrames = min(
-    MAX_FRAMES,
-    max(
-        original?.durationFrames() ?: 0,
-        if (recording != null) {
-            recording.durationFrames() + offsetFrames
-        } else {
-            0
+        val decodedClips = clips.map { clip ->
+            val clampedOffsetMs = clip.offsetMs.coerceIn(0, MAX_SECONDS * 1000)
+            DecodedClip(
+                track = decode(clip.uri),
+                offsetFrames = (clampedOffsetMs.toLong() * SAMPLE_RATE / 1000).toInt(),
+                offsetSec = clampedOffsetMs / 1000.0,
+                gain = clip.volume.coerceIn(0f, 1f).toDouble()
+            )
         }
-    )
-)
 
+        val longestClipFrames = decodedClips.maxOfOrNull { clip ->
+            clip.track.durationFrames() + clip.offsetFrames
+        } ?: 0
+
+        val totalFrames = min(
+            MAX_FRAMES,
+            max(
+                original?.durationFrames() ?: 0,
+                longestClipFrames
+            )
+        )
 
         require(totalFrames > 0) {
             "The audio tracks contain no samples."
@@ -116,11 +125,7 @@ val totalFrames = min(
 
         writeWavHeader(out, dataSize)
 
-        val originalGain =
-            originalVolume.coerceIn(0f, 1f).toDouble()
-
-        val recordingGain =
-            recordingVolume.coerceIn(0f, 1f).toDouble()
+        val originalGain = originalVolume.coerceIn(0f, 1f).toDouble()
 
         // Process small chunks instead of allocating
         // an additional full-length output array.
@@ -134,35 +139,28 @@ val totalFrames = min(
             var position = 0
 
             for (i in 0 until count) {
-                val time =
-                    (frame + i).toDouble() / SAMPLE_RATE
+                val time = (frame + i).toDouble() / SAMPLE_RATE
 
                 for (channel in 0 until CHANNELS) {
-                    val first = original?.sampleAt(
-                        time, channel
-                    ) ?: 0.0
+                    var sum = (original?.sampleAt(time, channel) ?: 0.0) * originalGain
 
-val recordingTime =
-    time - recordingOffsetMs.coerceIn(0, 30000) / 1000.0
+                    for (clip in decodedClips) {
+                        val clipTime = time - clip.offsetSec
+                        if (clipTime >= 0.0) {
+                            sum += clip.track.sampleAt(clipTime, channel) * clip.gain
+                        }
+                    }
 
-val second = recording?.sampleAt(
-    recordingTime, channel
-) ?: 0.0
-
-                    val mixed = (
-                        first * originalGain +
-                        second * recordingGain
-                    ).roundToInt().coerceIn(
-                        Short.MIN_VALUE.toInt(),
-                        Short.MAX_VALUE.toInt()
-                    )
+                    val mixed = sum
+                        .roundToInt()
+                        .coerceIn(
+                            Short.MIN_VALUE.toInt(),
+                            Short.MAX_VALUE.toInt()
+                        )
 
                     // Signed 16-bit, little-endian PCM.
-                    chunk[position++] =
-                        (mixed and 0xFF).toByte()
-
-                    chunk[position++] =
-                        ((mixed ushr 8) and 0xFF).toByte()
+                    chunk[position++] = (mixed and 0xFF).toByte()
+                    chunk[position++] = ((mixed ushr 8) and 0xFF).toByte()
                 }
             }
 
@@ -180,9 +178,7 @@ val second = recording?.sampleAt(
 
         try {
             if (uri.scheme == "file") {
-                extractor.setDataSource(
-                    requireNotNull(uri.path)
-                )
+                extractor.setDataSource(requireNotNull(uri.path))
             } else {
                 extractor.setDataSource(context, uri, null)
             }
@@ -196,12 +192,8 @@ val second = recording?.sampleAt(
 
             extractor.selectTrack(trackIndex)
 
-            val sourceFormat =
-                extractor.getTrackFormat(trackIndex)
-
-            val mime = requireNotNull(
-                sourceFormat.getString(MediaFormat.KEY_MIME)
-            )
+            val sourceFormat = extractor.getTrackFormat(trackIndex)
+            val mime = requireNotNull(sourceFormat.getString(MediaFormat.KEY_MIME))
 
             decoder = MediaCodec.createDecoderByType(mime)
             val codec = decoder
@@ -220,23 +212,20 @@ val second = recording?.sampleAt(
 
             while (!outputEnded) {
                 if (!inputEnded) {
-                    val index = codec.dequeueInputBuffer(
-                        TIMEOUT_US
-                    )
+                    val index = codec.dequeueInputBuffer(TIMEOUT_US)
 
                     if (index >= 0) {
-                        val input = requireNotNull(
-                            codec.getInputBuffer(index)
-                        )
-
+                        val input = requireNotNull(codec.getInputBuffer(index))
                         input.clear()
 
-                        val size =
-                            extractor.readSampleData(input, 0)
+                        val size = extractor.readSampleData(input, 0)
 
                         if (size < 0) {
                             codec.queueInputBuffer(
-                                index, 0, 0, 0,
+                                index,
+                                0,
+                                0,
+                                0,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM
                             )
                             inputEnded = true
@@ -253,9 +242,7 @@ val second = recording?.sampleAt(
                     }
                 }
 
-                val index = codec.dequeueOutputBuffer(
-                    info, TIMEOUT_US
-                )
+                val index = codec.dequeueOutputBuffer(info, TIMEOUT_US)
 
                 when {
                     index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -263,65 +250,38 @@ val second = recording?.sampleAt(
                     }
 
                     index >= 0 -> {
-                        val format =
-                            outputFormat ?: codec.outputFormat
-
+                        val format = outputFormat ?: codec.outputFormat
                         outputFormat = format
 
-                        val rate = format.getInteger(
-                            MediaFormat.KEY_SAMPLE_RATE
-                        )
+                        val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
-                        val channels = format.getInteger(
-                            MediaFormat.KEY_CHANNEL_COUNT
-                        )
-
-                        val encoding =
-                            if (format.containsKey(
-                                    MediaFormat.KEY_PCM_ENCODING
-                                )
-                            ) {
-                                format.getInteger(
-                                    MediaFormat.KEY_PCM_ENCODING
-                                )
-                            } else {
-                                AudioFormat.ENCODING_PCM_16BIT
-                            }
+                        val encoding = if (format.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                            format.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                        } else {
+                            AudioFormat.ENCODING_PCM_16BIT
+                        }
 
                         require(
                             channels in 1..2 &&
-                            encoding ==
-                                AudioFormat.ENCODING_PCM_16BIT
+                                encoding == AudioFormat.ENCODING_PCM_16BIT
                         ) {
                             "Only mono/stereo 16-bit PCM decoding is supported."
                         }
 
-                        maxBytes = (
-                            rate.toLong() *
-                            MAX_SECONDS *
-                            channels * 2L
-                        ).coerceAtMost(
-                            Int.MAX_VALUE.toLong()
-                        ).toInt()
+                        maxBytes = (rate.toLong() * MAX_SECONDS * channels * 2L)
+                            .coerceAtMost(Int.MAX_VALUE.toLong())
+                            .toInt()
 
                         if (info.size > 0) {
-                            val output = requireNotNull(
-                                codec.getOutputBuffer(index)
-                            )
-
+                            val output = requireNotNull(codec.getOutputBuffer(index))
                             output.position(info.offset)
-                            output.limit(
-                                info.offset + info.size
-                            )
+                            output.limit(info.offset + info.size)
 
                             val room = maxBytes - data.size()
-
-                            val bytesToCopy =
-                                min(info.size, room)
-                                    .coerceAtLeast(0)
-                                    .let {
-                                        it - (it % (channels * 2))
-                                    }
+                            val bytesToCopy = min(info.size, room)
+                                .coerceAtLeast(0)
+                                .let { it - (it % (channels * 2)) }
 
                             if (bytesToCopy > 0) {
                                 val bytes = ByteArray(bytesToCopy)
@@ -331,8 +291,7 @@ val second = recording?.sampleAt(
                         }
 
                         outputEnded =
-                            info.flags and
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0 ||
+                            info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0 ||
                             data.size() >= maxBytes
 
                         codec.releaseOutputBuffer(index, false)
@@ -344,18 +303,14 @@ val second = recording?.sampleAt(
                 "Decoder did not produce an audio format."
             }
 
-            val channels =
-                format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-
-            val sampleRate =
-                format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
 
             return DecodedTrack(
                 pcm = data.toByteArray(),
                 sampleRate = sampleRate,
                 channels = channels
             )
-
         } finally {
             if (started) {
                 try {
