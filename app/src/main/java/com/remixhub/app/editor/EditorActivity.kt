@@ -42,13 +42,14 @@ class EditorActivity : Activity() {
     }
 
     private data class ExtraClipPlayer(
-            val clipId: String,
-            val offsetMs: Int,
-            val muted: Boolean,
-            val player: MediaPlayer,
-            var ready: Boolean = false
+        val clipId: String,
+        val offsetMs: Int,
+        val muted: Boolean,
+        val player: MediaPlayer,
+        var ready: Boolean = false
     )
 
+    private lateinit var visualTimeline: TimelineView
     private lateinit var exportButton: Button
     private var exporting = false
     private lateinit var audioRecorder: AudioRecorder
@@ -96,26 +97,24 @@ class EditorActivity : Activity() {
 
     private val timelineHandler = Handler(Looper.getMainLooper())
 
-    private val timelineTicker =
-            object : Runnable {
-                override fun run() {
-                    if (!isPlaying) return
+    private val timelineTicker = object : Runnable {
+        override fun run() {
+            if (!isPlaying) return
 
-                    playheadMs =
-                            (SystemClock.elapsedRealtime() - playbackStartedAtMs)
-                                    .toInt()
-                                    .coerceIn(0, timelineDurationMs)
+            playheadMs = (SystemClock.elapsedRealtime() - playbackStartedAtMs)
+                .toInt()
+                .coerceIn(0, timelineDurationMs)
 
-                    startRecordingLayerIfDue()
-                    updateTimelineDisplay()
+            startRecordingLayerIfDue()
+            updateTimelineDisplay()
 
-                    if (playheadMs >= timelineDurationMs) {
-                        finishPlayback()
-                    } else {
-                        timelineHandler.postDelayed(this, 50L)
-                    }
-                }
+            if (playheadMs >= timelineDurationMs) {
+                finishPlayback()
+            } else {
+                timelineHandler.postDelayed(this, 50L)
             }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -125,28 +124,25 @@ class EditorActivity : Activity() {
         audioRecorder = AudioRecorder(applicationContext)
         projectStore = ProjectStore(this)
 
-        projectId =
-                intent.getStringExtra(EXTRA_PROJECT_ID)
-                        ?: run {
-                            finish()
-                            return
-                        }
+        projectId = intent.getStringExtra(EXTRA_PROJECT_ID) ?: run {
+            finish()
+            return
+        }
 
-        val project =
-                try {
-                    projectStore.getById(projectId)
-                } catch (_: Exception) {
-                    null
-                }
+        val project = try {
+            projectStore.getById(projectId)
+        } catch (_: Exception) {
+            null
+        }
 
         if (project == null) {
             finish()
             return
         }
 
-        val selectedClip =
-                project.clips.firstOrNull { it.id == project.activeClipId }
-                        ?: project.clips.firstOrNull()
+        val selectedClip = project.clips.firstOrNull {
+            it.id == project.activeClipId
+        } ?: project.clips.firstOrNull()
 
         selectedClipId = selectedClip?.id
         selectedClipMuted = selectedClip?.isMuted ?: false
@@ -167,10 +163,9 @@ class EditorActivity : Activity() {
 
         originalUri = project.originalUri?.let(Uri::parse)
 
-        recordingFile =
-                (selectedClip?.filePath ?: project.recordingPath)?.let(::File)?.takeIf {
-                    it.exists()
-                }
+        recordingFile = (selectedClip?.filePath ?: project.recordingPath)
+            ?.let(::File)
+            ?.takeIf { it.exists() }
 
         originalVolume.progress = project.originalVolume.coerceIn(0, 100)
         recordingVolume.progress = project.recordingVolume.coerceIn(0, 100)
@@ -191,9 +186,11 @@ class EditorActivity : Activity() {
         playPauseButton.setOnClickListener { togglePlayback() }
 
         originalVolume.setOnSeekBarChangeListener(
-                volumeListener { volume -> originalPlayer?.setVolume(volume, volume) }
+            volumeListener { volume -> originalPlayer?.setVolume(volume, volume) }
         )
-        recordingVolume.setOnSeekBarChangeListener(volumeListener { applyAllRecordingVolumes() })
+        recordingVolume.setOnSeekBarChangeListener(
+            volumeListener { applyAllRecordingVolumes() }
+        )
 
         offsetSeekBar = findViewById(R.id.seekRecordingOffset)
         timelineSeekBar = findViewById(R.id.seekTimeline)
@@ -204,90 +201,107 @@ class EditorActivity : Activity() {
         offsetSeekBar.progress = (recordingOffsetMs / 100).coerceIn(0, 300)
 
         offsetSeekBar.setOnSeekBarChangeListener(
-                object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(
-                            seekBar: SeekBar,
-                            progress: Int,
-                            fromUser: Boolean
-                    ) {
-                        if (fromUser) {
-                            recordingOffsetMs = progress * 100
-                            refreshTimelineDuration()
-                            updateTimelineDisplay()
-                        }
-                    }
-
-                    override fun onStartTrackingTouch(seekBar: SeekBar) {
-                        if (isPlaying) pausePlayback()
-                    }
-
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
-                        try {
-                            projectStore.update(
-                                    projectId,
-                                    "Recording moved to ${recordingOffsetMs / 1000.0}s"
-                            ) { project ->
-                                project.copy(
-                                        recordingOffsetMs = recordingOffsetMs,
-                                        clips =
-                                                project.clips.map { clip ->
-                                                    if (clip.id == project.activeClipId) {
-                                                        clip.copy(offsetMs = recordingOffsetMs)
-                                                    } else {
-                                                        clip
-                                                    }
-                                                }
-                                )
-                            }
-                        } catch (_: Exception) {
-                            playbackStatus.text = "Unable to save recording position."
-                        }
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar,
+                    progress: Int,
+                    fromUser: Boolean
+                ) {
+                    if (fromUser) {
+                        recordingOffsetMs = progress * 100
+                        refreshTimelineDuration()
+                        updateTimelineDisplay()
+                        refreshVisualTimeline()
                     }
                 }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) {
+                    if (isPlaying) pausePlayback()
+                }
+
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    try {
+                        projectStore.update(
+                            projectId,
+                            "Recording moved to ${recordingOffsetMs / 1000.0}s"
+                        ) { project ->
+                            project.copy(
+                                recordingOffsetMs = recordingOffsetMs,
+                                clips = project.clips.map { clip ->
+                                    if (clip.id == project.activeClipId) {
+                                        clip.copy(offsetMs = recordingOffsetMs)
+                                    } else {
+                                        clip
+                                    }
+                                }
+                            )
+                        }
+                        refreshVisualTimeline()
+                    } catch (_: Exception) {
+                        playbackStatus.text = "Unable to save recording position."
+                    }
+                }
+            }
         )
 
         timelineSeekBar.setOnSeekBarChangeListener(
-                object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(
-                            seekBar: SeekBar,
-                            progress: Int,
-                            fromUser: Boolean
-                    ) {
-                        if (fromUser) {
-                            playheadMs = (progress * 100).coerceAtMost(timelineDurationMs)
-                            updateTimelineDisplay()
-                        }
-                    }
-
-                    override fun onStartTrackingTouch(seekBar: SeekBar) {
-                        if (isPlaying) pausePlayback()
-                    }
-
-                    override fun onStopTrackingTouch(seekBar: SeekBar) {
-                        seekPreviewTo(playheadMs)
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar,
+                    progress: Int,
+                    fromUser: Boolean
+                ) {
+                    if (fromUser) {
+                        playheadMs = (progress * 100).coerceAtMost(timelineDurationMs)
+                        updateTimelineDisplay()
                     }
                 }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) {
+                    if (isPlaying) pausePlayback()
+                }
+
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    seekPreviewTo(playheadMs)
+                }
+            }
         )
+
+        visualTimeline = findViewById(R.id.visualTimeline)
+
+        visualTimeline.onClipSelected = { clipId ->
+            if (!audioRecorder.isRecording && !exporting) {
+                val clip = projectStore.getById(projectId)
+                    ?.clips
+                    ?.firstOrNull { it.id == clipId }
+
+                if (clip != null) {
+                    selectRecordingClip(clip)
+                }
+            }
+        }
+
+        visualTimeline.onClipMoved = { clipId, newOffsetMs ->
+            moveClipOnTimeline(clipId, newOffsetMs)
+        }
 
         updateTimelineDisplay()
         displayRecordingClips()
         updateTrackLabels()
         updateControls()
+        refreshVisualTimeline()
 
         if (::clipContainer.isInitialized &&
-                        ::projectStore.isInitialized &&
-                        ::projectId.isInitialized
+            ::projectStore.isInitialized &&
+            ::projectId.isInitialized
         ) {
-
             fun updateClipViews(group: LinearLayout) {
                 for (index in 0 until group.childCount) {
                     when (val child = group.getChildAt(index)) {
                         is LinearLayout -> updateClipViews(child)
                         is Button, is SeekBar -> {
                             val path = child.tag as? String
-
                             val available = path == null || File(path).exists()
-
                             val canEdit = !audioRecorder.isRecording && !exporting
 
                             child.isEnabled = available && canEdit
@@ -295,8 +309,8 @@ class EditorActivity : Activity() {
                             // Rename and delete metadata are allowed
                             // even when the file is missing.
                             if (child is Button &&
-                                            (child.text == getString(R.string.clip_rename) ||
-                                                    child.text == getString(R.string.clip_delete))
+                                (child.text == getString(R.string.clip_rename) ||
+                                    child.text == getString(R.string.clip_delete))
                             ) {
                                 child.isEnabled = canEdit
                             }
@@ -314,17 +328,16 @@ class EditorActivity : Activity() {
         val clip = clipVolume.coerceIn(0, 100) / 100f
         return master * clip
     }
+
     private fun applyClipVolumePreview(clipId: String, clipVolume: Int) {
         val project = projectStore.getById(projectId) ?: return
-
         val clip = project.clips.firstOrNull { it.id == clipId } ?: return
 
-        val gain =
-                if (clip.isMuted) {
-                    0f
-                } else {
-                    effectiveClipGain(clipVolume)
-                }
+        val gain = if (clip.isMuted) {
+            0f
+        } else {
+            effectiveClipGain(clipVolume)
+        }
 
         if (clipId == selectedClipId) {
             recordingPlayer?.setVolume(gain, gain)
@@ -335,33 +348,27 @@ class EditorActivity : Activity() {
 
     private fun applyAllRecordingVolumes() {
         val project = projectStore.getById(projectId) ?: return
-
         project.clips.forEach { clip -> applyClipVolumePreview(clip.id, clip.volume) }
     }
 
     private fun saveNewRecording(file: File): Boolean {
-        val nextNumber = (
-    projectStore.getById(projectId)
-        ?.clips
-        ?.size ?: 0
-) + 1
-        val clip =
-                RecordingClip(
-                        id = UUID.randomUUID().toString(),
-                        filePath = file.absolutePath,
-                        offsetMs = 0,
-                        isMuted = false,
-                        name = "Recording $nextNumber",
-                        volume = 100
-                )
+        val nextNumber = (projectStore.getById(projectId)?.clips?.size ?: 0) + 1
+        val clip = RecordingClip(
+            id = UUID.randomUUID().toString(),
+            filePath = file.absolutePath,
+            offsetMs = 0,
+            isMuted = false,
+            name = "Recording $nextNumber",
+            volume = 100
+        )
 
         return try {
             projectStore.update(projectId, "New recording clip added") { project ->
                 project.copy(
-                        clips = project.clips + clip,
-                        activeClipId = clip.id,
-                        recordingPath = clip.filePath,
-                        recordingOffsetMs = 0
+                    clips = project.clips + clip,
+                    activeClipId = clip.id,
+                    recordingPath = clip.filePath,
+                    recordingOffsetMs = 0
                 )
             }
 
@@ -373,6 +380,7 @@ class EditorActivity : Activity() {
 
             updateTrackLabels()
             displayRecordingClips()
+            refreshVisualTimeline()
 
             true
         } catch (_: Exception) {
@@ -389,11 +397,10 @@ class EditorActivity : Activity() {
         val project = projectStore.getById(projectId) ?: return
 
         if (project.clips.isEmpty()) {
-            val empty =
-                    TextView(this).apply {
-                        setText(R.string.recording_clips_empty)
-                        setTextColor(getColor(R.color.gray))
-                    }
+            val empty = TextView(this).apply {
+                setText(R.string.recording_clips_empty)
+                setTextColor(getColor(R.color.gray))
+            }
 
             clipContainer.addView(empty)
             return
@@ -403,170 +410,150 @@ class EditorActivity : Activity() {
             val available = File(clip.filePath).exists()
             val selected = clip.id == project.activeClipId
 
-            val container =
-                    LinearLayout(this).apply {
-                        orientation = LinearLayout.VERTICAL
-                        setPadding(8, 16, 8, 24)
-                    }
+            val container = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(8, 16, 8, 24)
+            }
 
             // Clip name and timeline information.
-            val title =
-                    TextView(this).apply {
-                        text = buildString {
-                            append(clip.name)
+            val title = TextView(this).apply {
+                text = buildString {
+                    append(clip.name)
 
-                            if (selected) {
-                                append(" (Selected)")
-                            }
-
-                            if (!available) {
-                                append(" (Missing file)")
-                            }
-                        }
-
-                        textSize = 18f
-                        setTextColor(getColor(R.color.black))
-                        setTypeface(null, android.graphics.Typeface.BOLD)
+                    if (selected) {
+                        append(" (Selected)")
                     }
+
+                    if (!available) {
+                        append(" (Missing file)")
+                    }
+                }
+
+                textSize = 18f
+                setTextColor(getColor(R.color.black))
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            }
 
             container.addView(title)
 
-            val details =
-                    TextView(this).apply {
-                        text = "Clip ${index + 1} • " + "Start: ${clip.offsetMs / 1000.0}s"
-
-                        textSize = 13f
-                        setTextColor(getColor(R.color.gray))
-                        setPadding(0, 8, 0, 12)
-                    }
+            val details = TextView(this).apply {
+                text = "Clip ${index + 1} • Start: ${clip.offsetMs / 1000.0}s"
+                textSize = 13f
+                setTextColor(getColor(R.color.gray))
+                setPadding(0, 8, 0, 12)
+            }
 
             container.addView(details)
 
             // Select the clip for timeline editing.
-            val selectButton =
-                    Button(this).apply {
-                        text =
-                                if (selected) {
-                                    "Selected Clip"
-                                } else {
-                                    "Select Clip"
-                                }
+            val selectButton = Button(this).apply {
+                text = if (selected) {
+                    "Selected Clip"
+                } else {
+                    "Select Clip"
+                }
 
-                        isAllCaps = false
-                        tag = clip.filePath
+                isAllCaps = false
+                tag = clip.filePath
+                isEnabled = available && !audioRecorder.isRecording && !exporting
 
-                        isEnabled = available && !audioRecorder.isRecording && !exporting
-
-                        setOnClickListener { selectRecordingClip(clip) }
-                    }
+                setOnClickListener { selectRecordingClip(clip) }
+            }
 
             container.addView(selectButton)
 
             // Individual clip volume.
-            val volumeLabel =
-                    TextView(this).apply {
-                        text = getString(R.string.clip_volume_percent, clip.volume)
-
-                        setTextColor(getColor(R.color.black))
-                        setPadding(0, 16, 0, 4)
-                    }
+            val volumeLabel = TextView(this).apply {
+                text = getString(R.string.clip_volume_percent, clip.volume)
+                setTextColor(getColor(R.color.black))
+                setPadding(0, 16, 0, 4)
+            }
 
             container.addView(volumeLabel)
 
-            val volumeSlider =
-                    SeekBar(this).apply {
-                        max = 100
-                        progress = clip.volume
-                        tag = clip.filePath
-
-                        isEnabled = available && !audioRecorder.isRecording && !exporting
-
-                        progressTintList = ColorStateList.valueOf(getColor(R.color.black))
-
-                        thumbTintList = ColorStateList.valueOf(getColor(R.color.black))
-                    }
+            val volumeSlider = SeekBar(this).apply {
+                max = 100
+                progress = clip.volume
+                tag = clip.filePath
+                isEnabled = available && !audioRecorder.isRecording && !exporting
+                progressTintList = ColorStateList.valueOf(getColor(R.color.black))
+                thumbTintList = ColorStateList.valueOf(getColor(R.color.black))
+            }
 
             volumeSlider.setOnSeekBarChangeListener(
-                    object : SeekBar.OnSeekBarChangeListener {
+                object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(
+                        seekBar: SeekBar,
+                        progress: Int,
+                        fromUser: Boolean
+                    ) {
+                        if (!fromUser) return
 
-                        override fun onProgressChanged(
-                                seekBar: SeekBar,
-                                progress: Int,
-                                fromUser: Boolean
-                        ) {
-                            if (!fromUser) return
-
-                            volumeLabel.text = getString(R.string.clip_volume_percent, progress)
-
-                            applyClipVolumePreview(clip.id, progress)
-                        }
-
-                        override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
-
-                        override fun onStopTrackingTouch(seekBar: SeekBar) {
-                            saveClipVolume(clip.id, seekBar.progress)
-                        }
+                        volumeLabel.text = getString(R.string.clip_volume_percent, progress)
+                        applyClipVolumePreview(clip.id, progress)
                     }
+
+                    override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+                    override fun onStopTrackingTouch(seekBar: SeekBar) {
+                        saveClipVolume(clip.id, seekBar.progress)
+                    }
+                }
             )
 
             container.addView(volumeSlider)
 
             // Mute / Unmute.
-            val muteButton =
-                    Button(this).apply {
-                        text =
-                                if (clip.isMuted) {
-                                    "Unmute"
-                                } else {
-                                    "Mute"
-                                }
+            val muteButton = Button(this).apply {
+                text = if (clip.isMuted) {
+                    "Unmute"
+                } else {
+                    "Mute"
+                }
 
-                        isAllCaps = false
-                        tag = clip.filePath
+                isAllCaps = false
+                tag = clip.filePath
+                isEnabled = available && !audioRecorder.isRecording && !exporting
 
-                        isEnabled = available && !audioRecorder.isRecording && !exporting
-
-                        setOnClickListener { toggleClipMute(clip.id) }
-                    }
+                setOnClickListener { toggleClipMute(clip.id) }
+            }
 
             container.addView(muteButton)
 
             // Rename.
-            val renameButton =
-                    Button(this).apply {
-                        setText(R.string.clip_rename)
-                        isAllCaps = false
-                        tag = clip.filePath
+            val renameButton = Button(this).apply {
+                setText(R.string.clip_rename)
+                isAllCaps = false
+                tag = clip.filePath
+                isEnabled = !audioRecorder.isRecording && !exporting
 
-                        isEnabled = !audioRecorder.isRecording && !exporting
-
-                        setOnClickListener { renameRecordingClip(clip) }
-                    }
+                setOnClickListener { renameRecordingClip(clip) }
+            }
 
             container.addView(renameButton)
 
             // Delete.
-            val deleteButton =
-                    Button(this).apply {
-                        setText(R.string.clip_delete)
-                        isAllCaps = false
-                        tag = clip.filePath
+            val deleteButton = Button(this).apply {
+                setText(R.string.clip_delete)
+                isAllCaps = false
+                tag = clip.filePath
+                isEnabled = !audioRecorder.isRecording && !exporting
 
-                        isEnabled = !audioRecorder.isRecording && !exporting
-
-                        setOnClickListener { confirmDeleteRecording(clip) }
-                    }
+                setOnClickListener { confirmDeleteRecording(clip) }
+            }
 
             container.addView(deleteButton)
 
             // Separate clips visually.
-            val divider = View(this).apply { setBackgroundColor(getColor(R.color.light_gray)) }
+            val divider = View(this).apply {
+                setBackgroundColor(getColor(R.color.light_gray))
+            }
 
             container.addView(
-                    divider,
-                    LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2).apply {
-                        topMargin = 20
-                    }
+                divider,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2).apply {
+                    topMargin = 20
+                }
             )
 
             clipContainer.addView(container)
@@ -580,9 +567,9 @@ class EditorActivity : Activity() {
         try {
             projectStore.update(projectId, "Recording clip selected") {
                 it.copy(
-                        activeClipId = clip.id,
-                        recordingPath = clip.filePath,
-                        recordingOffsetMs = clip.offsetMs
+                    activeClipId = clip.id,
+                    recordingPath = clip.filePath,
+                    recordingOffsetMs = clip.offsetMs
                 )
             }
 
@@ -597,6 +584,7 @@ class EditorActivity : Activity() {
             updateTrackLabels()
             displayRecordingClips()
             preparePlayers()
+            refreshVisualTimeline()
         } catch (_: Exception) {
             playbackStatus.setText(R.string.clip_save_error)
         }
@@ -637,15 +625,15 @@ class EditorActivity : Activity() {
 
     private fun openAudioPicker() {
         if (exporting || audioRecorder.isRecording) return
-        val intent =
-                Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "audio/*"
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
 
-        @Suppress("DEPRECATION") startActivityForResult(intent, AUDIO_REQUEST_CODE)
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, AUDIO_REQUEST_CODE)
     }
 
     @Deprecated("Native Activity result API")
@@ -712,14 +700,14 @@ class EditorActivity : Activity() {
         val projectName = projectStore.getById(projectId)?.name ?: "RemixHub"
         val safeName = projectName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 
-        val intent =
-                Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "audio/wav"
-                    putExtra(Intent.EXTRA_TITLE, "${safeName}_mix.wav")
-                }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, "${safeName}_mix.wav")
+        }
 
-        @Suppress("DEPRECATION") startActivityForResult(intent, EXPORT_REQUEST_CODE)
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, EXPORT_REQUEST_CODE)
     }
 
     private fun exportMix(destinationUri: Uri) {
@@ -744,18 +732,16 @@ class EditorActivity : Activity() {
             return
         }
 
-        val exportClips =
-                includedClips.map { clip ->
-                    val clipGain = clip.volume
-                    .coerceIn(0, 100) / 100f
-                    val effectiveGain = recordingGain * clipGain
+        val exportClips = includedClips.map { clip ->
+            val clipGain = clip.volume.coerceIn(0, 100) / 100f
+            val effectiveGain = recordingGain * clipGain
 
-                    WavMixExporter.MixClip(
-                            uri = Uri.fromFile(File(clip.filePath)),
-                            offsetMs = clip.offsetMs,
-                            volume = effectiveGain
-                    )
-                }
+            WavMixExporter.MixClip(
+                uri = Uri.fromFile(File(clip.filePath)),
+                offsetMs = clip.offsetMs,
+                volume = effectiveGain
+            )
+        }
 
         if (sourceOriginal == null && exportClips.isEmpty()) {
             playbackStatus.text = "No unmuted audio available to export."
@@ -770,56 +756,54 @@ class EditorActivity : Activity() {
         updateControls()
 
         Thread {
-                    try {
-                        val stream =
-                                requireNotNull(
-                                        contentResolver.openOutputStream(destinationUri, "w")
-                                ) { "Unable to open export destination." }
+            try {
+                val stream = requireNotNull(
+                    contentResolver.openOutputStream(destinationUri, "w")
+                ) { "Unable to open export destination." }
 
-                        stream.use {
-                            val exporter = WavMixExporter(applicationContext)
-                            exporter.export(
-                                    originalUri = sourceOriginal,
-                                    originalVolume = originalGain,
-                                    clips = exportClips,
-                                    destination = it
-                            )
-                        }
+                stream.use {
+                    val exporter = WavMixExporter(applicationContext)
+                    exporter.export(
+                        originalUri = sourceOriginal,
+                        originalVolume = originalGain,
+                        clips = exportClips,
+                        destination = it
+                    )
+                }
 
-                        projectStore.update(projectId, "Mix exported as WAV") { it }
+                projectStore.update(projectId, "Mix exported as WAV") { it }
 
-                        runOnUiThread {
-                            if (!isDestroyed) {
-                                exporting = false
-                                preparePlayers()
-                                playbackStatus.setText(R.string.status_export_success)
-                                updateControls()
-                            }
-                        }
-                    } catch (error: Exception) {
-                        android.util.Log.e("RemixHub", "Audio export failed", error)
-
-                        runOnUiThread {
-                            if (!isDestroyed) {
-                                exporting = false
-                                preparePlayers()
-
-                                playbackStatus.text =
-                                        "Export failed: " + (error.message ?: "Unknown error")
-
-                                updateControls()
-                            }
-                        }
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        exporting = false
+                        preparePlayers()
+                        playbackStatus.setText(R.string.status_export_success)
+                        updateControls()
                     }
                 }
-                .start()
+            } catch (error: Exception) {
+                android.util.Log.e("RemixHub", "Audio export failed", error)
+
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        exporting = false
+                        preparePlayers()
+
+                        playbackStatus.text =
+                            "Export failed: " + (error.message ?: "Unknown error")
+
+                        updateControls()
+                    }
+                }
+            }
+        }.start()
     }
 
     // MICROPHONE RECORDING
 
     private fun checkMicrophonePermission() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
-                        PackageManager.PERMISSION_GRANTED
+            PackageManager.PERMISSION_GRANTED
         ) {
             startRecording()
         } else {
@@ -828,9 +812,9 @@ class EditorActivity : Activity() {
     }
 
     override fun onRequestPermissionsResult(
-            requestCode: Int,
-            permissions: Array<out String>,
-            grantResults: IntArray
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
@@ -882,100 +866,95 @@ class EditorActivity : Activity() {
         updateControls()
 
         val project = projectStore.getById(projectId)
-        val extraClips =
-                project?.clips
-                        ?.filter { clip ->
-                            clip.id != selectedClipId && File(clip.filePath).exists()
-                        }
-                        .orEmpty()
+        val extraClips = project?.clips
+            ?.filter { clip ->
+                clip.id != selectedClipId && File(clip.filePath).exists()
+            }
+            .orEmpty()
 
         if (originalUri == null && recordingFile == null && extraClips.isEmpty()) {
             playbackStatus.setText(R.string.status_empty)
+            refreshVisualTimeline()
             return
         }
 
         playbackStatus.setText(R.string.status_loading)
 
         originalUri?.let { uri ->
-            originalPlayer =
-                    createPlayer(
-                            configure = { player -> player.setDataSource(this, uri) },
-                            onReady = {
-                                originalReady = true
-                                updateReadyState()
-                            },
-                            onFinished = {
-                                // Original audio controls the end
-                                // of a two-track preview.
-                            }
-                    )
+            originalPlayer = createPlayer(
+                configure = { player -> player.setDataSource(this, uri) },
+                onReady = {
+                    originalReady = true
+                    updateReadyState()
+                },
+                onFinished = {
+                    // Original audio controls the end
+                    // of a two-track preview.
+                }
+            )
         }
 
         recordingFile?.let { file ->
             if (file.exists()) {
-                recordingPlayer =
-                        createPlayer(
-                                configure = { player -> player.setDataSource(file.absolutePath) },
-                                onReady = {
-                                    recordingReady = true
-                                    updateReadyState()
-                                },
-                                onFinished = { selectedClipId?.let(finishedClipIds::add) }
-                        )
+                recordingPlayer = createPlayer(
+                    configure = { player -> player.setDataSource(file.absolutePath) },
+                    onReady = {
+                        recordingReady = true
+                        updateReadyState()
+                    },
+                    onFinished = { selectedClipId?.let(finishedClipIds::add) }
+                )
             }
         }
 
         extraClips.forEach { clip ->
             val audioFile = File(clip.filePath)
-            val player =
-                    createPlayer(
-                            configure = { mediaPlayer ->
-                                mediaPlayer.setDataSource(audioFile.absolutePath)
-                            },
-                            onReady = {
-                                val entry = extraClipPlayers.firstOrNull { it.clipId == clip.id }
-                                if (entry != null) {
-                                    entry.ready = true
-                                    updateReadyState()
-                                }
-                            },
-                            onFinished = { finishedClipIds.add(clip.id) }
-                    )
+            val player = createPlayer(
+                configure = { mediaPlayer ->
+                    mediaPlayer.setDataSource(audioFile.absolutePath)
+                },
+                onReady = {
+                    val entry = extraClipPlayers.firstOrNull { it.clipId == clip.id }
+                    if (entry != null) {
+                        entry.ready = true
+                        updateReadyState()
+                    }
+                },
+                onFinished = { finishedClipIds.add(clip.id) }
+            )
 
             if (player != null) {
                 extraClipPlayers.add(
-                        ExtraClipPlayer(
-                                clipId = clip.id,
-                                offsetMs = clip.offsetMs.coerceAtLeast(0),
-                                muted = clip.isMuted,
-                                player = player
-                        )
+                    ExtraClipPlayer(
+                        clipId = clip.id,
+                        offsetMs = clip.offsetMs.coerceAtLeast(0),
+                        muted = clip.isMuted,
+                        player = player
+                    )
                 )
             }
         }
 
         updateControls()
         exportButton.isEnabled =
-                !audioRecorder.isRecording &&
-                        !exporting &&
-                        (originalUri != null ||
-                                recordingFile != null ||
-                                extraClipPlayers.isNotEmpty())
+            !audioRecorder.isRecording &&
+            !exporting &&
+            (originalUri != null || recordingFile != null || extraClipPlayers.isNotEmpty())
     }
 
     private fun createPlayer(
-            configure: (MediaPlayer) -> Unit,
-            onReady: () -> Unit,
-            onFinished: () -> Unit
+        configure: (MediaPlayer) -> Unit,
+        onReady: () -> Unit,
+        onFinished: () -> Unit
     ): MediaPlayer? {
         val player = MediaPlayer()
 
         try {
             player.setAudioAttributes(
-                    AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
             )
 
             configure(player)
@@ -1005,11 +984,12 @@ class EditorActivity : Activity() {
 
     private fun updateReadyState() {
         val ready =
-                (originalUri == null || originalReady) &&
-                        (recordingFile == null || recordingReady) &&
-                        extraClipPlayers.all { it.ready }
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady) &&
+            extraClipPlayers.all { it.ready }
 
         refreshTimelineDuration()
+        refreshVisualTimeline()
 
         if (ready) {
             playbackStatus.setText(R.string.status_ready)
@@ -1031,22 +1011,20 @@ class EditorActivity : Activity() {
     private fun renameRecordingClip(clip: RecordingClip) {
         if (audioRecorder.isRecording || exporting) return
 
-        val input =
-                EditText(this).apply {
-                    setText(clip.name)
-                    setSelection(text.length)
-                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                    isSingleLine = true
-                    setPadding(32, 24, 32, 24)
-                }
+        val input = EditText(this).apply {
+            setText(clip.name)
+            setSelection(text.length)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            isSingleLine = true
+            setPadding(32, 24, 32, 24)
+        }
 
-        val dialog =
-                AlertDialog.Builder(this)
-                        .setTitle(R.string.clip_rename)
-                        .setView(input)
-                        .setNegativeButton(R.string.clip_cancel, null)
-                        .setPositiveButton(R.string.clip_save, null)
-                        .create()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.clip_rename)
+            .setView(input)
+            .setNegativeButton(R.string.clip_cancel, null)
+            .setPositiveButton(R.string.clip_save, null)
+            .create()
 
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -1060,19 +1038,18 @@ class EditorActivity : Activity() {
                 try {
                     projectStore.update(projectId, "Recording renamed to $newName") { project ->
                         project.copy(
-                                clips =
-                                        project.clips.map {
-                                            if (it.id == clip.id) {
-                                                it.copy(name = newName)
-                                            } else {
-                                                it
-                                            }
-                                        }
+                            clips = project.clips.map {
+                                if (it.id == clip.id) {
+                                    it.copy(name = newName)
+                                } else {
+                                    it
+                                }
+                            }
                         )
                     }
 
                     displayRecordingClips()
-
+                    refreshVisualTimeline()
                     playbackStatus.setText(R.string.clip_name_changed)
 
                     dialog.dismiss()
@@ -1089,18 +1066,18 @@ class EditorActivity : Activity() {
         try {
             projectStore.update(projectId, "Recording volume changed") { project ->
                 project.copy(
-                        clips =
-                                project.clips.map { clip ->
-                                    if (clip.id == clipId) {
-                                        clip.copy(volume = volume.coerceIn(0, 100))
-                                    } else {
-                                        clip
-                                    }
-                                }
+                    clips = project.clips.map { clip ->
+                        if (clip.id == clipId) {
+                            clip.copy(volume = volume.coerceIn(0, 100))
+                        } else {
+                            clip
+                        }
+                    }
                 )
             }
 
             applyClipVolumePreview(clipId, volume)
+            refreshVisualTimeline()
         } catch (_: Exception) {
             playbackStatus.setText(R.string.clip_edit_error)
         }
@@ -1110,9 +1087,9 @@ class EditorActivity : Activity() {
         if (audioRecorder.isRecording || exporting) return
 
         val ready =
-                (originalUri == null || originalReady) &&
-                        (recordingFile == null || recordingReady) &&
-                        extraClipPlayers.all { it.ready }
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady) &&
+            extraClipPlayers.all { it.ready }
 
         if (!ready || timelineDurationMs <= 0) return
 
@@ -1125,7 +1102,6 @@ class EditorActivity : Activity() {
 
         try {
             val originalGain = originalVolume.progress / 100f
-            val recordingGain = recordingVolume.progress / 100f
 
             originalPlayer?.setVolume(originalGain, originalGain)
             applyAllRecordingVolumes()
@@ -1167,25 +1143,25 @@ class EditorActivity : Activity() {
         try {
             projectStore.update(projectId, "Recording mute setting changed") { project ->
                 project.copy(
-                        clips =
-                                project.clips.map { clip ->
-                                    if (clip.id == clipId) {
-                                        clip.copy(isMuted = !clip.isMuted)
-                                    } else {
-                                        clip
-                                    }
-                                }
+                    clips = project.clips.map { clip ->
+                        if (clip.id == clipId) {
+                            clip.copy(isMuted = !clip.isMuted)
+                        } else {
+                            clip
+                        }
+                    }
                 )
             }
 
             val project = projectStore.getById(projectId)
 
             selectedClipMuted =
-                    project?.clips?.firstOrNull { it.id == selectedClipId }?.isMuted ?: false
+                project?.clips?.firstOrNull { it.id == selectedClipId }?.isMuted ?: false
 
             // Rebuild the players with the new mute state.
             preparePlayers()
             displayRecordingClips()
+            refreshVisualTimeline()
         } catch (_: Exception) {
             playbackStatus.text = "Unable to update recording mute setting."
         }
@@ -1207,9 +1183,7 @@ class EditorActivity : Activity() {
                 if (!player.isPlaying) {
                     player.seekTo(position.toLong(), MediaPlayer.SEEK_CLOSEST)
 
-                    val clip =
-                            projectStore.getById(projectId)?.clips?.firstOrNull { it.id == clipId }
-
+                    val clip = projectStore.getById(projectId)?.clips?.firstOrNull { it.id == clipId }
                     val volume = effectiveClipGain(clip?.volume ?: 100)
                     player.setVolume(volume, volume)
                     player.start()
@@ -1226,10 +1200,10 @@ class EditorActivity : Activity() {
 
             if (player != null && id != null) {
                 startLayer(
-                        player = player,
-                        offsetMs = recordingOffsetMs,
-                        clipId = id,
-                        muted = selectedClipMuted
+                    player = player,
+                    offsetMs = recordingOffsetMs,
+                    clipId = id,
+                    muted = selectedClipMuted
                 )
             }
         }
@@ -1238,10 +1212,10 @@ class EditorActivity : Activity() {
         extraClipPlayers.forEach { entry ->
             if (entry.ready) {
                 startLayer(
-                        player = entry.player,
-                        offsetMs = entry.offsetMs,
-                        clipId = entry.clipId,
-                        muted = entry.muted
+                    player = entry.player,
+                    offsetMs = entry.offsetMs,
+                    clipId = entry.clipId,
+                    muted = entry.muted
                 )
             }
         }
@@ -1251,10 +1225,9 @@ class EditorActivity : Activity() {
         timelineHandler.removeCallbacks(timelineTicker)
 
         if (isPlaying) {
-            playheadMs =
-                    (SystemClock.elapsedRealtime() - playbackStartedAtMs)
-                            .toInt()
-                            .coerceIn(0, timelineDurationMs)
+            playheadMs = (SystemClock.elapsedRealtime() - playbackStartedAtMs)
+                .toInt()
+                .coerceIn(0, timelineDurationMs)
         }
 
         try {
@@ -1348,12 +1321,11 @@ class EditorActivity : Activity() {
     private fun updateTrackLabels() {
         trackName.text = originalUri?.let { getAudioFileName(it) } ?: getString(R.string.no_track)
 
-        recordingName.text =
-                if (recordingFile != null) {
-                    getString(R.string.recording_name)
-                } else {
-                    getString(R.string.no_recording)
-                }
+        recordingName.text = if (recordingFile != null) {
+            getString(R.string.recording_name)
+        } else {
+            getString(R.string.no_recording)
+        }
     }
 
     private fun updateControls() {
@@ -1361,62 +1333,63 @@ class EditorActivity : Activity() {
 
         val recording = audioRecorder.isRecording
         val hasAudio =
-                originalPlayer != null || recordingPlayer != null || extraClipPlayers.isNotEmpty()
+            originalPlayer != null || recordingPlayer != null || extraClipPlayers.isNotEmpty()
         val ready =
-                (originalUri == null || originalReady) &&
-                        (recordingFile == null || recordingReady) &&
-                        extraClipPlayers.all { it.ready }
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady) &&
+            extraClipPlayers.all { it.ready }
 
         importButton.isEnabled = !recording
         playPauseButton.isEnabled = !recording && hasAudio && ready
 
         recordButton.setText(
-                if (recording) {
-                    R.string.stop_recording
-                } else {
-                    R.string.start_recording
-                }
+            if (recording) {
+                R.string.stop_recording
+            } else {
+                R.string.start_recording
+            }
         )
 
         playPauseButton.setText(
-                if (isPlaying) {
-                    R.string.pause_mix
-                } else {
-                    R.string.play_mix
-                }
+            if (isPlaying) {
+                R.string.pause_mix
+            } else {
+                R.string.play_mix
+            }
         )
 
         if (::offsetSeekBar.isInitialized) {
             offsetSeekBar.isEnabled = !audioRecorder.isRecording && !exporting && recordingReady
 
             timelineSeekBar.isEnabled =
-                    !audioRecorder.isRecording && !exporting && timelineDurationMs > 0
+                !audioRecorder.isRecording && !exporting && timelineDurationMs > 0
+        }
+
+        if (::visualTimeline.isInitialized) {
+            visualTimeline.isEnabled = !audioRecorder.isRecording && !exporting
         }
     }
 
     private fun refreshTimelineDuration() {
-        val originalDuration =
-                if (originalReady) {
-                    originalPlayer?.duration ?: 0
-                } else {
-                    0
-                }
+        val originalDuration = if (originalReady) {
+            originalPlayer?.duration ?: 0
+        } else {
+            0
+        }
 
-        val selectedDuration =
-                if (recordingReady) {
-                    recordingOffsetMs + (recordingPlayer?.duration ?: 0)
-                } else {
-                    0
-                }
+        val selectedDuration = if (recordingReady) {
+            recordingOffsetMs + (recordingPlayer?.duration ?: 0)
+        } else {
+            0
+        }
 
-        val extraDuration =
-                extraClipPlayers.filter { it.ready }.maxOfOrNull { entry ->
-                    entry.offsetMs + entry.player.duration
-                }
-                        ?: 0
+        val extraDuration = extraClipPlayers
+            .filter { it.ready }
+            .maxOfOrNull { entry -> entry.offsetMs + entry.player.duration }
+            ?: 0
 
         timelineDurationMs =
-                maxOf(originalDuration, selectedDuration, extraDuration).coerceAtLeast(0)
+            maxOf(originalDuration, selectedDuration, extraDuration).coerceAtLeast(0)
 
         playheadMs = playheadMs.coerceIn(0, timelineDurationMs)
 
@@ -1439,32 +1412,30 @@ class EditorActivity : Activity() {
         if (audioRecorder.isRecording || exporting) return
 
         AlertDialog.Builder(this)
-                .setTitle(R.string.clip_delete_title)
-                .setMessage(getString(R.string.clip_delete_message) + "\n\n" + clip.name)
-                .setNegativeButton(R.string.clip_cancel, null)
-                .setPositiveButton(R.string.clip_delete) { _, _ -> deleteRecordingClip(clip.id) }
-                .show()
+            .setTitle(R.string.clip_delete_title)
+            .setMessage(getString(R.string.clip_delete_message) + "\n\n" + clip.name)
+            .setNegativeButton(R.string.clip_cancel, null)
+            .setPositiveButton(R.string.clip_delete) { _, _ -> deleteRecordingClip(clip.id) }
+            .show()
     }
 
     private fun deleteRecordingClip(clipId: String) {
         if (audioRecorder.isRecording || exporting) return
 
         val project = projectStore.getById(projectId) ?: return
-
         val clip = project.clips.firstOrNull { it.id == clipId } ?: return
-
         val remaining = project.clips.filterNot { it.id == clipId }
 
         val nextSelected =
-                remaining.firstOrNull { it.id == project.activeClipId } ?: remaining.firstOrNull()
+            remaining.firstOrNull { it.id == project.activeClipId } ?: remaining.firstOrNull()
 
         try {
             projectStore.update(projectId, "Recording deleted: ${clip.name}") {
                 it.copy(
-                        clips = remaining,
-                        activeClipId = nextSelected?.id,
-                        recordingPath = nextSelected?.filePath,
-                        recordingOffsetMs = nextSelected?.offsetMs ?: 0
+                    clips = remaining,
+                    activeClipId = nextSelected?.id,
+                    recordingPath = nextSelected?.filePath,
+                    recordingOffsetMs = nextSelected?.offsetMs ?: 0
                 )
             }
         } catch (_: Exception) {
@@ -1479,7 +1450,6 @@ class EditorActivity : Activity() {
         selectedClipMuted = nextSelected?.isMuted ?: false
 
         recordingFile = nextSelected?.filePath?.let(::File)?.takeIf { it.exists() }
-
         recordingOffsetMs = nextSelected?.offsetMs?.coerceIn(0, 30000) ?: 0
 
         offsetSeekBar.progress = recordingOffsetMs / 100
@@ -1489,15 +1459,13 @@ class EditorActivity : Activity() {
         // is no longer referenced by any saved project.
         try {
             val file = File(clip.filePath).canonicalFile
-
             val recordingDirectory = File(filesDir, "recordings").canonicalFile
 
-            val stillReferenced =
-                    projectStore.getAll().any { saved ->
-                        saved.clips.any { File(it.filePath).canonicalFile == file } ||
-                                (saved.recordingPath != null &&
-                                        File(saved.recordingPath).canonicalFile == file)
-                    }
+            val stillReferenced = projectStore.getAll().any { saved ->
+                saved.clips.any { File(it.filePath).canonicalFile == file } ||
+                    (saved.recordingPath != null &&
+                        File(saved.recordingPath).canonicalFile == file)
+            }
 
             if (file.parentFile == recordingDirectory && !stillReferenced && file.isFile) {
                 if (!file.delete()) {
@@ -1516,6 +1484,7 @@ class EditorActivity : Activity() {
         preparePlayers()
 
         playbackStatus.setText(R.string.clip_deleted)
+        refreshVisualTimeline()
     }
 
     private fun updateTimelineDisplay() {
@@ -1523,14 +1492,17 @@ class EditorActivity : Activity() {
 
         timelineSeekBar.progress = playheadMs / 100
 
-        timelineText.text =
-                getString(
-                        R.string.timeline_position_format,
-                        formatTime(playheadMs),
-                        formatTime(timelineDurationMs)
-                )
+        timelineText.text = getString(
+            R.string.timeline_position_format,
+            formatTime(playheadMs),
+            formatTime(timelineDurationMs)
+        )
 
         offsetText.text = getString(R.string.timeline_offset_format, recordingOffsetMs / 1000.0)
+
+        if (::visualTimeline.isInitialized) {
+            visualTimeline.setPlayhead(playheadMs)
+        }
     }
 
     private fun seekPreviewTo(positionMs: Int) {
@@ -1553,14 +1525,13 @@ class EditorActivity : Activity() {
 
             recordingPlayer?.takeIf { recordingReady }?.let {
                 val positionInRecording = (playheadMs - recordingOffsetMs).coerceIn(0, it.duration)
-
                 it.seekTo(positionInRecording.toLong(), MediaPlayer.SEEK_CLOSEST)
             }
 
             extraClipPlayers.forEach { entry ->
                 if (entry.ready) {
                     val relativePosition =
-                            (playheadMs - entry.offsetMs).coerceIn(0, entry.player.duration)
+                        (playheadMs - entry.offsetMs).coerceIn(0, entry.player.duration)
 
                     entry.player.seekTo(relativePosition.toLong(), MediaPlayer.SEEK_CLOSEST)
                 }
@@ -1570,6 +1541,97 @@ class EditorActivity : Activity() {
         }
 
         updateTimelineDisplay()
+    }
+
+    private fun moveClipOnTimeline(
+        clipId: String,
+        newOffsetMs: Int
+    ) {
+        if (audioRecorder.isRecording || exporting) return
+
+        val offset = newOffsetMs.coerceIn(0, 30000)
+
+        try {
+            projectStore.update(
+                projectId,
+                "Clip moved to ${offset / 1000.0}s"
+            ) { project ->
+                project.copy(
+                    clips = project.clips.map { clip ->
+                        if (clip.id == clipId) {
+                            clip.copy(offsetMs = offset)
+                        } else {
+                            clip
+                        }
+                    },
+                    recordingOffsetMs = if (project.activeClipId == clipId) {
+                        offset
+                    } else {
+                        project.recordingOffsetMs
+                    }
+                )
+            }
+
+            if (selectedClipId == clipId) {
+                recordingOffsetMs = offset
+                offsetSeekBar.progress = offset / 100
+            }
+
+            // Rebuild playback to use the updated offsets.
+            preparePlayers()
+            displayRecordingClips()
+            refreshVisualTimeline()
+        } catch (_: Exception) {
+            playbackStatus.text = "Unable to save clip position."
+            refreshVisualTimeline()
+        }
+    }
+
+    private fun refreshVisualTimeline() {
+        if (!::visualTimeline.isInitialized) return
+
+        val project = projectStore.getById(projectId) ?: return
+
+        val originalDuration = if (originalReady) {
+            originalPlayer?.duration ?: 0
+        } else {
+            0
+        }
+
+        val bars = project.clips.map { clip ->
+            val duration = when (clip.id) {
+                selectedClipId -> {
+                    if (recordingReady) {
+                        recordingPlayer?.duration ?: 0
+                    } else {
+                        0
+                    }
+                }
+
+                else -> {
+                    extraClipPlayers.firstOrNull {
+                        it.clipId == clip.id && it.ready
+                    }?.player?.duration ?: 0
+                }
+            }
+
+            TimelineView.ClipBar(
+                id = clip.id,
+                name = clip.name,
+                offsetMs = clip.offsetMs,
+                durationMs = duration,
+                muted = clip.isMuted
+            )
+        }
+
+        visualTimeline.setTimeline(
+            originalDurationMs = originalDuration,
+            clips = bars,
+            selectedId = project.activeClipId,
+            durationMs = timelineDurationMs
+        )
+
+        visualTimeline.setPlayhead(playheadMs)
     }
 
     // ACTIVITY LIFECYCLE
