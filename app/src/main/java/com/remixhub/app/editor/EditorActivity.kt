@@ -4,27 +4,28 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import com.remixhub.app.R
 import com.remixhub.app.audio.AudioRecorder
-import java.io.File
-import com.remixhub.app.data.ProjectStore
 import com.remixhub.app.audio.WavMixExporter
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
-import java.util.Locale
-import android.content.res.ColorStateList
-import android.widget.LinearLayout
+import com.remixhub.app.data.ProjectStore
 import com.remixhub.app.data.RecordingClip
+import java.io.File
+import java.util.Locale
 import java.util.UUID
+
 class EditorActivity : Activity() {
 
     companion object {
@@ -35,6 +36,7 @@ class EditorActivity : Activity() {
         private const val STATE_AUDIO_URI = "audio_uri"
         private const val STATE_RECORDING_PATH = "recording_path"
     }
+
     private lateinit var exportButton: Button
     private var exporting = false
     private lateinit var audioRecorder: AudioRecorder
@@ -73,54 +75,65 @@ class EditorActivity : Activity() {
 
     private lateinit var originalVolume: SeekBar
     private lateinit var recordingVolume: SeekBar
-private val timelineHandler = Handler(
-    Looper.getMainLooper()
-)
 
-private val timelineTicker = object : Runnable {
-    override fun run() {
-        if (!isPlaying) return
+    private val timelineHandler = Handler(Looper.getMainLooper())
 
-        playheadMs = (
-            SystemClock.elapsedRealtime() -
-            playbackStartedAtMs
-        ).toInt().coerceIn(0, timelineDurationMs)
+    private val timelineTicker = object : Runnable {
+        override fun run() {
+            if (!isPlaying) return
 
-        startRecordingLayerIfDue()
-        updateTimelineDisplay()
+            playheadMs = (SystemClock.elapsedRealtime() - playbackStartedAtMs)
+                .toInt()
+                .coerceIn(0, timelineDurationMs)
 
-        if (playheadMs >= timelineDurationMs) {
-            finishPlayback()
-        } else {
-            timelineHandler.postDelayed(this, 50L)
+            startRecordingLayerIfDue()
+            updateTimelineDisplay()
+
+            if (playheadMs >= timelineDurationMs) {
+                finishPlayback()
+            } else {
+                timelineHandler.postDelayed(this, 50L)
+            }
         }
     }
-}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_editor)
+        clipContainer = findViewById(R.id.clipContainer)
 
         audioRecorder = AudioRecorder(applicationContext)
+        projectStore = ProjectStore(this)
 
-            projectStore = ProjectStore(this)
+        projectId = intent.getStringExtra(EXTRA_PROJECT_ID) ?: run {
+            finish()
+            return
+        }
 
-            projectId = intent.getStringExtra(EXTRA_PROJECT_ID)
-                                            ?: run {
-                                            finish()
-                                        return
-                                        }
+        val project = try {
+            projectStore.getById(projectId)
+        } catch (_: Exception) {
+            null
+        }
 
-val project = try {
-    projectStore.getById(projectId)
-} catch (_: Exception) {
-    null
-}
+        if (project == null) {
+            finish()
+            return
+        }
 
-if (project == null) {
-    finish()
-    return
-}
+        val selectedClip = project.clips.firstOrNull {
+            it.id == project.activeClipId
+        } ?: project.clips.firstOrNull()
 
+        recordingFile = selectedClip
+            ?.filePath
+            ?.let(::File)
+            ?.takeIf { it.exists() }
+
+        recordingOffsetMs = selectedClip
+            ?.offsetMs
+            ?.coerceIn(0, 30000)
+            ?: project.recordingOffsetMs.coerceIn(0, 30000)
 
         trackName = findViewById(R.id.textTrackName)
         recordingName = findViewById(R.id.textRecordingName)
@@ -132,30 +145,25 @@ if (project == null) {
         exportButton = findViewById(R.id.btnExportMix)
 
         exportButton.setOnClickListener {
-                        openExportPicker()
+            openExportPicker()
         }
+
         originalVolume = findViewById(R.id.seekOriginalVolume)
         recordingVolume = findViewById(R.id.seekRecordingVolume)
 
+        originalUri = project.originalUri?.let(Uri::parse)
 
-originalUri = project.originalUri?.let(Uri::parse)
+        recordingFile = project.recordingPath
+            ?.let(::File)
+            ?.takeIf { it.exists() }
 
-recordingFile = project.recordingPath
-    ?.let(::File)
-    ?.takeIf { it.exists() }
+        originalVolume.progress = project.originalVolume.coerceIn(0, 100)
+        recordingVolume.progress = project.recordingVolume.coerceIn(0, 100)
+        recordingOffsetMs = project.recordingOffsetMs.coerceIn(0, 30000)
 
-originalVolume.progress = project.originalVolume
-    .coerceIn(0, 100)
-
-recordingVolume.progress = project.recordingVolume
-    .coerceIn(0, 100)
-recordingOffsetMs = project.recordingOffsetMs
-    .coerceIn(0, 30000)
-
-        findViewById<TextView>(R.id.textBack)
-            .setOnClickListener {
-                finish()
-            }
+        findViewById<TextView>(R.id.textBack).setOnClickListener {
+            finish()
+        }
 
         importButton.setOnClickListener {
             openAudioPicker()
@@ -185,144 +193,268 @@ recordingOffsetMs = project.recordingOffsetMs
             }
         )
 
-offsetSeekBar = findViewById(R.id.seekRecordingOffset)
-timelineSeekBar = findViewById(R.id.seekTimeline)
+        offsetSeekBar = findViewById(R.id.seekRecordingOffset)
+        timelineSeekBar = findViewById(R.id.seekTimeline)
 
-offsetText = findViewById(R.id.textOffset)
-timelineText = findViewById(R.id.textTimelinePosition)
+        offsetText = findViewById(R.id.textOffset)
+        timelineText = findViewById(R.id.textTimelinePosition)
 
-offsetSeekBar.progress =
-    (recordingOffsetMs / 100).coerceIn(0, 300)
+        offsetSeekBar.progress = (recordingOffsetMs / 100).coerceIn(0, 300)
 
-offsetSeekBar.setOnSeekBarChangeListener(
-    object : SeekBar.OnSeekBarChangeListener {
-        override fun onProgressChanged(
-            seekBar: SeekBar,
-            progress: Int,
-            fromUser: Boolean
-        ) {
-            if (fromUser) {
-                recordingOffsetMs = progress * 100
-                refreshTimelineDuration()
-                updateTimelineDisplay()
-            }
-        }
-
-        override fun onStartTrackingTouch(
-            seekBar: SeekBar
-        ) {
-            if (isPlaying) pausePlayback()
-        }
-
-        override fun onStopTrackingTouch(
-            seekBar: SeekBar
-        ) {
-            try {
-                projectStore.update(
-                    projectId,
-                    "Recording moved to ${recordingOffsetMs / 1000.0}s"
+        offsetSeekBar.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar,
+                    progress: Int,
+                    fromUser: Boolean
                 ) {
-                    it.copy(
-                        recordingOffsetMs = recordingOffsetMs
-                    )
+                    if (fromUser) {
+                        recordingOffsetMs = progress * 100
+                        refreshTimelineDuration()
+                        updateTimelineDisplay()
+                    }
                 }
-            } catch (_: Exception) {
-                playbackStatus.text =
-                    "Unable to save recording position."
+
+                override fun onStartTrackingTouch(seekBar: SeekBar) {
+                    if (isPlaying) pausePlayback()
+                }
+
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    try {
+                        projectStore.update(
+                            projectId,
+                            "Recording moved to ${recordingOffsetMs / 1000.0}s"
+                        ) { project ->
+                            project.copy(
+                                recordingOffsetMs = recordingOffsetMs,
+                                clips = project.clips.map { clip ->
+                                    if (clip.id == project.activeClipId) {
+                                        clip.copy(offsetMs = recordingOffsetMs)
+                                    } else {
+                                        clip
+                                    }
+                                }
+                            )
+                        }
+                    } catch (_: Exception) {
+                        playbackStatus.text = "Unable to save recording position."
+                    }
+                }
             }
-        }
-    }
-)
+        )
 
-timelineSeekBar.setOnSeekBarChangeListener(
-    object : SeekBar.OnSeekBarChangeListener {
-        override fun onProgressChanged(
-            seekBar: SeekBar,
-            progress: Int,
-            fromUser: Boolean
-        ) {
-            if (fromUser) {
-                playheadMs = (
-                    progress * 100
-                ).coerceAtMost(timelineDurationMs)
+        timelineSeekBar.setOnSeekBarChangeListener(
+            object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(
+                    seekBar: SeekBar,
+                    progress: Int,
+                    fromUser: Boolean
+                ) {
+                    if (fromUser) {
+                        playheadMs = (progress * 100).coerceAtMost(timelineDurationMs)
+                        updateTimelineDisplay()
+                    }
+                }
 
-                updateTimelineDisplay()
+                override fun onStartTrackingTouch(seekBar: SeekBar) {
+                    if (isPlaying) pausePlayback()
+                }
+
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    seekPreviewTo(playheadMs)
+                }
             }
-        }
+        )
 
-        override fun onStartTrackingTouch(
-            seekBar: SeekBar
-        ) {
-            if (isPlaying) pausePlayback()
-        }
-
-        override fun onStopTrackingTouch(
-            seekBar: SeekBar
-        ) {
-            seekPreviewTo(playheadMs)
-        }
-    }
-)
         updateTimelineDisplay()
+        displayRecordingClips()
         updateTrackLabels()
         updateControls()
-    }
 
-
-private fun volumeListener(
-    onVolumeChanged: (Float) -> Unit
-): SeekBar.OnSeekBarChangeListener {
-
-    return object : SeekBar.OnSeekBarChangeListener {
-
-        override fun onProgressChanged(
-            seekBar: SeekBar,
-            progress: Int,
-            fromUser: Boolean
+        if (::clipContainer.isInitialized &&
+            ::projectStore.isInitialized &&
+            ::projectId.isInitialized
         ) {
-            if (fromUser) {
-                onVolumeChanged(progress / 100f)
-            }
-        }
-
-        override fun onStartTrackingTouch(
-            seekBar: SeekBar
-        ) = Unit
-
-        override fun onStopTrackingTouch(
-            seekBar: SeekBar
-        ) {
-            try {
-                when (seekBar.id) {
-                    R.id.seekOriginalVolume -> {
-                        projectStore.update(
-                            projectId,
-                            "Original volume changed"
-                        ) {
-                            it.copy(
-                                originalVolume = seekBar.progress
-                            )
-                        }
-                    }
-
-                    R.id.seekRecordingVolume -> {
-                        projectStore.update(
-                            projectId,
-                            "Recording volume changed"
-                        ) {
-                            it.copy(
-                                recordingVolume = seekBar.progress
-                            )
-                        }
-                    }
+            for (index in 0 until clipContainer.childCount) {
+                val button = clipContainer.getChildAt(index) as? Button
+                if (button != null) {
+                    button.isEnabled =
+                        !audioRecorder.isRecording && !exporting &&
+                        !button.text.contains("(Missing file)")
                 }
-            } catch (_: Exception) {
-                playbackStatus.text =
-                    "Unable to save volume setting."
             }
         }
     }
-}
+
+    private fun saveNewRecording(file: File): Boolean {
+        val clip = RecordingClip(
+            id = UUID.randomUUID().toString(),
+            filePath = file.absolutePath,
+            offsetMs = 0
+        )
+
+        return try {
+            projectStore.update(
+                projectId,
+                "New recording clip added"
+            ) { project ->
+                project.copy(
+                    clips = project.clips + clip,
+                    activeClipId = clip.id,
+                    recordingPath = clip.filePath,
+                    recordingOffsetMs = 0
+                )
+            }
+
+            recordingFile = file
+            recordingOffsetMs = 0
+            offsetSeekBar.progress = 0
+
+            updateTrackLabels()
+            displayRecordingClips()
+
+            true
+        } catch (_: Exception) {
+            playbackStatus.setText(R.string.clip_save_error)
+            false
+        }
+    }
+
+    private fun displayRecordingClips() {
+        if (!::clipContainer.isInitialized) return
+
+        clipContainer.removeAllViews()
+
+        val project = projectStore.getById(projectId) ?: return
+
+        if (project.clips.isEmpty()) {
+            val empty = TextView(this).apply {
+                setText(R.string.recording_clips_empty)
+                setTextColor(getColor(R.color.gray))
+            }
+
+            clipContainer.addView(empty)
+            return
+        }
+
+        project.clips.forEachIndexed { index, clip ->
+            val selected = clip.id == project.activeClipId
+            val available = File(clip.filePath).exists()
+
+            val button = Button(this).apply {
+                text = buildString {
+                    append(
+                        getString(
+                            R.string.recording_clip_format,
+                            index + 1
+                        )
+                    )
+
+                    if (selected) append(" (Selected)")
+                    if (!available) append(" (Missing file)")
+                }
+
+                isAllCaps = false
+                isEnabled = available && !audioRecorder.isRecording && !exporting
+
+                setTextColor(
+                    getColor(
+                        if (selected) R.color.white
+                        else R.color.black
+                    )
+                )
+
+                backgroundTintList = ColorStateList.valueOf(
+                    getColor(
+                        if (selected) R.color.black
+                        else R.color.light_gray
+                    )
+                )
+
+                setOnClickListener {
+                    selectRecordingClip(clip)
+                }
+            }
+
+            clipContainer.addView(button)
+        }
+    }
+
+    private fun selectRecordingClip(clip: RecordingClip) {
+        if (audioRecorder.isRecording || exporting) return
+        if (!File(clip.filePath).exists()) return
+
+        try {
+            projectStore.update(
+                projectId,
+                "Recording clip selected"
+            ) {
+                it.copy(
+                    activeClipId = clip.id,
+                    recordingPath = clip.filePath,
+                    recordingOffsetMs = clip.offsetMs
+                )
+            }
+
+            releasePlayers()
+
+            recordingFile = File(clip.filePath)
+            recordingOffsetMs = clip.offsetMs.coerceIn(0, 30000)
+
+            offsetSeekBar.progress = recordingOffsetMs / 100
+
+            updateTrackLabels()
+            displayRecordingClips()
+            preparePlayers()
+        } catch (_: Exception) {
+            playbackStatus.setText(R.string.clip_save_error)
+        }
+    }
+
+    private fun volumeListener(
+        onVolumeChanged: (Float) -> Unit
+    ): SeekBar.OnSeekBarChangeListener {
+        return object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(
+                seekBar: SeekBar,
+                progress: Int,
+                fromUser: Boolean
+            ) {
+                if (fromUser) {
+                    onVolumeChanged(progress / 100f)
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                try {
+                    when (seekBar.id) {
+                        R.id.seekOriginalVolume -> {
+                            projectStore.update(
+                                projectId,
+                                "Original volume changed"
+                            ) {
+                                it.copy(originalVolume = seekBar.progress)
+                            }
+                        }
+
+                        R.id.seekRecordingVolume -> {
+                            projectStore.update(
+                                projectId,
+                                "Recording volume changed"
+                            ) {
+                                it.copy(recordingVolume = seekBar.progress)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    playbackStatus.text = "Unable to save volume setting."
+                }
+            }
+        }
+    }
+
     // AUDIO IMPORT
 
     private fun openAudioPicker() {
@@ -347,17 +479,15 @@ private fun volumeListener(
         super.onActivityResult(requestCode, resultCode, data)
 
         if (requestCode == EXPORT_REQUEST_CODE) {
-    if (resultCode == RESULT_OK) {
-        data?.data?.let { destination ->
-            exportMix(destination)
+            if (resultCode == RESULT_OK) {
+                data?.data?.let { destination ->
+                    exportMix(destination)
+                }
+            }
+            return
         }
-    }
-    return
-}
 
-        if (requestCode != AUDIO_REQUEST_CODE ||
-            resultCode != RESULT_OK
-        ) return
+        if (requestCode != AUDIO_REQUEST_CODE || resultCode != RESULT_OK) return
 
         val uri = data?.data ?: return
 
@@ -371,22 +501,20 @@ private fun volumeListener(
             // still support current-session playback.
         }
 
+        try {
+            projectStore.update(
+                projectId,
+                "Original audio imported"
+            ) {
+                it.copy(originalUri = uri.toString())
+            }
 
-try {
-    projectStore.update(
-        projectId,
-        "Original audio imported"
-    ) {
-        it.copy(originalUri = uri.toString())
-    }
-
-    originalUri = uri
-    updateTrackLabels()
-    preparePlayers()
-} catch (_: Exception) {
-    playbackStatus.text = "Unable to save imported audio."
-}
-
+            originalUri = uri
+            updateTrackLabels()
+            preparePlayers()
+        } catch (_: Exception) {
+            playbackStatus.text = "Unable to save imported audio."
+        }
     }
 
     private fun getAudioFileName(uri: Uri): String {
@@ -396,9 +524,7 @@ try {
             contentResolver.query(
                 uri, null, null, null, null
             )?.use { cursor ->
-                val index = cursor.getColumnIndex(
-                    OpenableColumns.DISPLAY_NAME
-                )
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
 
                 if (index >= 0 && cursor.moveToFirst()) {
                     name = cursor.getString(index) ?: name
@@ -411,132 +537,111 @@ try {
         return name
     }
 
-private fun openExportPicker() {
-    if (exporting || audioRecorder.isRecording) return
+    private fun openExportPicker() {
+        if (exporting || audioRecorder.isRecording) return
 
-    if (originalUri == null && recordingFile == null) {
-        playbackStatus.text = "No audio available to export."
-        return
-    }
-
-    val projectName = projectStore.getById(projectId)
-        ?.name ?: "RemixHub"
-
-    val safeName = projectName.replace(
-        Regex("[^a-zA-Z0-9_-]"),
-        "_"
-    )
-
-    val intent = Intent(
-        Intent.ACTION_CREATE_DOCUMENT
-    ).apply {
-        addCategory(Intent.CATEGORY_OPENABLE)
-        type = "audio/wav"
-        putExtra(
-            Intent.EXTRA_TITLE,
-            "${safeName}_mix.wav"
-        )
-    }
-
-    @Suppress("DEPRECATION")
-    startActivityForResult(intent, EXPORT_REQUEST_CODE)
-}
-
-private fun exportMix(destinationUri: Uri) {
-    if (exporting || audioRecorder.isRecording) return
-
-    val sourceOriginal = originalUri
-    val sourceRecording = recordingFile
-        ?.takeIf { it.exists() }
-        ?.let(Uri::fromFile)
-
-    if (sourceOriginal == null && sourceRecording == null) {
-        playbackStatus.text = "No audio available to export."
-        return
-    }
-
-    val originalGain = originalVolume.progress / 100f
-    val recordingGain = recordingVolume.progress / 100f
-    val exportOffsetMs = recordingOffsetMs
-    
-
-    exporting = true
-    playbackStatus.setText(R.string.status_exporting)
-
-    // Exporting should not compete with preview playback.
-    releasePlayers()
-    updateControls()
-
-    Thread {
-        try {
-            val stream = requireNotNull(
-                contentResolver.openOutputStream(
-                    destinationUri,
-                    "w"
-                )
-            ) {
-                "Unable to open export destination."
-            }
-
-            stream.use {
-                val exporter = WavMixExporter(
-                    applicationContext
-                )
-exporter.export(
-    originalUri = sourceOriginal,
-    recordingUri = sourceRecording,
-    originalVolume = originalGain,
-    recordingVolume = recordingGain,
-    recordingOffsetMs = exportOffsetMs,
-    destination = it
-)
-            }
-
-            projectStore.update(
-                projectId,
-                "Mix exported as WAV"
-            ) { it }
-
-            runOnUiThread {
-                if (!isDestroyed) {
-                    exporting = false
-                    preparePlayers()
-                    playbackStatus.setText(
-                        R.string.status_export_success
-                    )
-                    updateControls()
-                }
-            }
-
-        } catch (error: Exception) {
-            android.util.Log.e(
-                "RemixHub",
-                "Audio export failed",
-                error
-            )
-
-            runOnUiThread {
-                if (!isDestroyed) {
-                    exporting = false
-                    preparePlayers()
-
-                    playbackStatus.text =
-                        "Export failed: " +
-                        (error.message ?: "Unknown error")
-
-                    updateControls()
-                }
-            }
+        if (originalUri == null && recordingFile == null) {
+            playbackStatus.text = "No audio available to export."
+            return
         }
-    }.start()
-}
+
+        val projectName = projectStore.getById(projectId)?.name ?: "RemixHub"
+        val safeName = projectName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/wav"
+            putExtra(Intent.EXTRA_TITLE, "${safeName}_mix.wav")
+        }
+
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, EXPORT_REQUEST_CODE)
+    }
+
+    private fun exportMix(destinationUri: Uri) {
+        if (exporting || audioRecorder.isRecording) return
+
+        val sourceOriginal = originalUri
+        val sourceRecording = recordingFile
+            ?.takeIf { it.exists() }
+            ?.let(Uri::fromFile)
+
+        if (sourceOriginal == null && sourceRecording == null) {
+            playbackStatus.text = "No audio available to export."
+            return
+        }
+
+        val originalGain = originalVolume.progress / 100f
+        val recordingGain = recordingVolume.progress / 100f
+        val exportOffsetMs = recordingOffsetMs
+
+        exporting = true
+        playbackStatus.setText(R.string.status_exporting)
+
+        // Exporting should not compete with preview playback.
+        releasePlayers()
+        updateControls()
+
+        Thread {
+            try {
+                val stream = requireNotNull(
+                    contentResolver.openOutputStream(destinationUri, "w")
+                ) {
+                    "Unable to open export destination."
+                }
+
+                stream.use {
+                    val exporter = WavMixExporter(applicationContext)
+                    exporter.export(
+                        originalUri = sourceOriginal,
+                        recordingUri = sourceRecording,
+                        originalVolume = originalGain,
+                        recordingVolume = recordingGain,
+                        recordingOffsetMs = exportOffsetMs,
+                        destination = it
+                    )
+                }
+
+                projectStore.update(
+                    projectId,
+                    "Mix exported as WAV"
+                ) { it }
+
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        exporting = false
+                        preparePlayers()
+                        playbackStatus.setText(R.string.status_export_success)
+                        updateControls()
+                    }
+                }
+            } catch (error: Exception) {
+                android.util.Log.e(
+                    "RemixHub",
+                    "Audio export failed",
+                    error
+                )
+
+                runOnUiThread {
+                    if (!isDestroyed) {
+                        exporting = false
+                        preparePlayers()
+
+                        playbackStatus.text =
+                            "Export failed: " + (error.message ?: "Unknown error")
+
+                        updateControls()
+                    }
+                }
+            }
+        }.start()
+    }
 
     // MICROPHONE RECORDING
 
     private fun checkMicrophonePermission() {
-        if (checkSelfPermission(
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
         ) {
             startRecording()
         } else {
@@ -552,22 +657,14 @@ exporter.export(
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            grantResults
-        )
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
         if (requestCode != MIC_PERMISSION_CODE) return
 
-        if (grantResults.firstOrNull() ==
-            PackageManager.PERMISSION_GRANTED
-        ) {
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             startRecording()
         } else {
-            playbackStatus.setText(
-                R.string.status_permission_denied
-            )
+            playbackStatus.setText(R.string.status_permission_denied)
         }
     }
 
@@ -580,13 +677,9 @@ exporter.export(
             audioRecorder.start()
 
             recordButton.setText(R.string.stop_recording)
-            playbackStatus.setText(
-                R.string.status_recording
-            )
+            playbackStatus.setText(R.string.status_recording)
         } catch (_: Exception) {
-            playbackStatus.setText(
-                R.string.status_recording_error
-            )
+            playbackStatus.setText(R.string.status_recording_error)
         }
 
         updateControls()
@@ -595,30 +688,14 @@ exporter.export(
     private fun stopRecording() {
         val file = audioRecorder.stop()
 
-
-if (file != null) {
-    recordingFile = file
-
-    try {
-        projectStore.update(
-            projectId,
-            "Microphone recording added"
-        ) {
-            it.copy(recordingPath = file.absolutePath)
+        if (file != null) {
+            if (saveNewRecording(file)) {
+                playbackStatus.setText(R.string.status_recorded)
+            }
+        } else {
+            playbackStatus.setText(R.string.status_recording_error)
         }
 
-        playbackStatus.setText(R.string.status_recorded)
-    } catch (_: Exception) {
-        playbackStatus.text = "Unable to save recording."
-    }
-}
- else {
-            playbackStatus.setText(
-                R.string.status_recording_error
-            )
-        }
-
-        updateTrackLabels()
         preparePlayers()
     }
 
@@ -656,9 +733,7 @@ if (file != null) {
             if (file.exists()) {
                 recordingPlayer = createPlayer(
                     configure = { player ->
-                        player.setDataSource(
-                            file.absolutePath
-                        )
+                        player.setDataSource(file.absolutePath)
                     },
                     onReady = {
                         recordingReady = true
@@ -672,9 +747,9 @@ if (file != null) {
 
         updateControls()
         exportButton.isEnabled =
-        !audioRecorder.isRecording &&
-        !exporting &&
-        (originalUri != null || recordingFile != null)
+            !audioRecorder.isRecording &&
+            !exporting &&
+            (originalUri != null || recordingFile != null)
     }
 
     private fun createPlayer(
@@ -688,9 +763,7 @@ if (file != null) {
             player.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(
-                        AudioAttributes.CONTENT_TYPE_MUSIC
-                    )
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                     .build()
             )
 
@@ -708,15 +781,12 @@ if (file != null) {
 
             player.setOnErrorListener { _, _, _ ->
                 releasePlayers()
-                playbackStatus.setText(
-                    R.string.status_error
-                )
+                playbackStatus.setText(R.string.status_error)
                 true
             }
 
             player.prepareAsync()
             return player
-
         } catch (_: Exception) {
             player.release()
             playbackStatus.setText(R.string.status_error)
@@ -724,21 +794,19 @@ if (file != null) {
         }
     }
 
+    private fun updateReadyState() {
+        val ready =
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady)
 
-private fun updateReadyState() {
-    val ready =
-        (originalUri == null || originalReady) &&
-        (recordingFile == null || recordingReady)
+        refreshTimelineDuration()
 
-    refreshTimelineDuration()
+        if (ready) {
+            playbackStatus.setText(R.string.status_ready)
+        }
 
-    if (ready) {
-        playbackStatus.setText(R.string.status_ready)
+        updateControls()
     }
-
-    updateControls()
-}
-
 
     // TWO-TRACK PLAYBACK
 
@@ -750,166 +818,146 @@ private fun updateReadyState() {
         }
     }
 
+    private fun startPlayback() {
+        if (audioRecorder.isRecording || exporting) return
 
-private fun startPlayback() {
-    if (audioRecorder.isRecording || exporting) return
+        val ready =
+            (originalUri == null || originalReady) &&
+            (recordingFile == null || recordingReady)
 
-    val ready =
-        (originalUri == null || originalReady) &&
-        (recordingFile == null || recordingReady)
+        if (!ready || timelineDurationMs <= 0) return
 
-    if (!ready || timelineDurationMs <= 0) return
+        timelineHandler.removeCallbacks(timelineTicker)
 
-    timelineHandler.removeCallbacks(timelineTicker)
-
-    if (playheadMs >= timelineDurationMs) {
-        playheadMs = 0
-    }
-
-    try {
-        val originalGain =
-            originalVolume.progress / 100f
-
-        val recordingGain =
-            recordingVolume.progress / 100f
-
-        originalPlayer?.setVolume(
-            originalGain, originalGain
-        )
-
-        recordingPlayer?.setVolume(
-            recordingGain, recordingGain
-        )
-
-        // Prepare the original player at the
-        // selected global timeline position.
-        originalPlayer?.takeIf { originalReady }?.let {
-            if (playheadMs < it.duration) {
-                it.seekTo(
-                    playheadMs.toLong(),
-                    MediaPlayer.SEEK_CLOSEST
-                )
-                it.start()
-            }
+        if (playheadMs >= timelineDurationMs) {
+            playheadMs = 0
         }
 
-        // If the current position is already
-        // past the recording start, begin from
-        // the corresponding position in that layer.
-        startRecordingLayerIfDue()
+        try {
+            val originalGain = originalVolume.progress / 100f
+            val recordingGain = recordingVolume.progress / 100f
 
-        playbackStartedAtMs =
-            SystemClock.elapsedRealtime() - playheadMs
+            originalPlayer?.setVolume(originalGain, originalGain)
+            recordingPlayer?.setVolume(recordingGain, recordingGain)
 
-        isPlaying = true
+            // Prepare the original player at the
+            // selected global timeline position.
+            originalPlayer?.takeIf { originalReady }?.let {
+                if (playheadMs < it.duration) {
+                    it.seekTo(
+                        playheadMs.toLong(),
+                        MediaPlayer.SEEK_CLOSEST
+                    )
+                    it.start()
+                }
+            }
+
+            // If the current position is already
+            // past the recording start, begin from
+            // the corresponding position in that layer.
+            startRecordingLayerIfDue()
+
+            playbackStartedAtMs = SystemClock.elapsedRealtime() - playheadMs
+
+            isPlaying = true
+            isPaused = false
+
+            playbackStatus.setText(R.string.status_playing)
+
+            updateControls()
+            updateTimelineDisplay()
+
+            timelineHandler.post(timelineTicker)
+        } catch (_: IllegalStateException) {
+            releasePlayers()
+            playbackStatus.setText(R.string.status_error)
+        }
+    }
+
+    private fun startRecordingLayerIfDue() {
+        if (!recordingReady) return
+
+        val player = recordingPlayer ?: return
+        val relativePosition = playheadMs - recordingOffsetMs
+
+        if (relativePosition < 0 || relativePosition >= player.duration) {
+            return
+        }
+
+        try {
+            if (!player.isPlaying) {
+                player.seekTo(
+                    relativePosition.toLong(),
+                    MediaPlayer.SEEK_CLOSEST
+                )
+
+                player.setVolume(
+                    recordingVolume.progress / 100f,
+                    recordingVolume.progress / 100f
+                )
+
+                player.start()
+            }
+        } catch (_: IllegalStateException) {
+            playbackStatus.setText(R.string.status_error)
+        }
+    }
+
+    private fun pausePlayback() {
+        timelineHandler.removeCallbacks(timelineTicker)
+
+        if (isPlaying) {
+            playheadMs = (SystemClock.elapsedRealtime() - playbackStartedAtMs)
+                .toInt()
+                .coerceIn(0, timelineDurationMs)
+        }
+
+        try {
+            if (originalPlayer?.isPlaying == true) {
+                originalPlayer?.pause()
+            }
+
+            if (recordingPlayer?.isPlaying == true) {
+                recordingPlayer?.pause()
+            }
+        } catch (_: IllegalStateException) {
+            releasePlayers()
+            playbackStatus.setText(R.string.status_error)
+            return
+        }
+
+        isPlaying = false
+        isPaused = true
+
+        playbackStatus.setText(R.string.status_paused)
+        updateControls()
+        updateTimelineDisplay()
+    }
+
+    private fun finishPlayback() {
+        timelineHandler.removeCallbacks(timelineTicker)
+
+        try {
+            if (originalPlayer?.isPlaying == true) {
+                originalPlayer?.pause()
+            }
+
+            if (recordingPlayer?.isPlaying == true) {
+                recordingPlayer?.pause()
+            }
+        } catch (_: IllegalStateException) {
+            // Players are cleaned up on activity stop.
+        }
+
+        playheadMs = timelineDurationMs
+        isPlaying = false
         isPaused = false
 
-        playbackStatus.setText(
-            R.string.status_playing
-        )
+        playbackStatus.setText(R.string.status_finished)
 
         updateControls()
         updateTimelineDisplay()
-
-        timelineHandler.post(timelineTicker)
-
-    } catch (_: IllegalStateException) {
-        releasePlayers()
-        playbackStatus.setText(R.string.status_error)
     }
-}
-
-private fun startRecordingLayerIfDue() {
-    if (!recordingReady) return
-
-    val player = recordingPlayer ?: return
-
-    val relativePosition =
-        playheadMs - recordingOffsetMs
-
-    if (relativePosition < 0 ||
-        relativePosition >= player.duration
-    ) {
-        return
-    }
-
-    try {
-        if (!player.isPlaying) {
-            player.seekTo(
-                relativePosition.toLong(),
-                MediaPlayer.SEEK_CLOSEST
-            )
-
-            player.setVolume(
-                recordingVolume.progress / 100f,
-                recordingVolume.progress / 100f
-            )
-
-            player.start()
-        }
-    } catch (_: IllegalStateException) {
-        playbackStatus.setText(R.string.status_error)
-    }
-}
-
-private fun pausePlayback() {
-    timelineHandler.removeCallbacks(timelineTicker)
-
-    if (isPlaying) {
-        playheadMs = (
-            SystemClock.elapsedRealtime() -
-            playbackStartedAtMs
-        ).toInt().coerceIn(0, timelineDurationMs)
-    }
-
-    try {
-        if (originalPlayer?.isPlaying == true) {
-            originalPlayer?.pause()
-        }
-
-        if (recordingPlayer?.isPlaying == true) {
-            recordingPlayer?.pause()
-        }
-    } catch (_: IllegalStateException) {
-        releasePlayers()
-        playbackStatus.setText(R.string.status_error)
-        return
-    }
-
-    isPlaying = false
-    isPaused = true
-
-    playbackStatus.setText(R.string.status_paused)
-    updateControls()
-    updateTimelineDisplay()
-}
-
-
-
-private fun finishPlayback() {
-    timelineHandler.removeCallbacks(timelineTicker)
-
-    try {
-        if (originalPlayer?.isPlaying == true) {
-            originalPlayer?.pause()
-        }
-
-        if (recordingPlayer?.isPlaying == true) {
-            recordingPlayer?.pause()
-        }
-    } catch (_: IllegalStateException) {
-        // Players are cleaned up on activity stop.
-    }
-
-    playheadMs = timelineDurationMs
-    isPlaying = false
-    isPaused = false
-
-    playbackStatus.setText(R.string.status_finished)
-
-    updateControls()
-    updateTimelineDisplay()
-}
 
     private fun releasePlayers() {
         timelineHandler.removeCallbacks(timelineTicker)
@@ -953,18 +1001,13 @@ private fun finishPlayback() {
         if (!::playPauseButton.isInitialized) return
 
         val recording = audioRecorder.isRecording
-
-        val hasAudio =
-            originalPlayer != null ||
-            recordingPlayer != null
-
+        val hasAudio = originalPlayer != null || recordingPlayer != null
         val ready =
             (originalUri == null || originalReady) &&
             (recordingFile == null || recordingReady)
 
         importButton.isEnabled = !recording
-        playPauseButton.isEnabled =
-            !recording && hasAudio && ready
+        playPauseButton.isEnabled = !recording && hasAudio && ready
 
         recordButton.setText(
             if (recording) {
@@ -981,126 +1024,118 @@ private fun finishPlayback() {
                 R.string.play_mix
             }
         )
+
         if (::offsetSeekBar.isInitialized) {
-    offsetSeekBar.isEnabled =
-        !audioRecorder.isRecording &&
-        !exporting &&
-        recordingReady
+            offsetSeekBar.isEnabled =
+                !audioRecorder.isRecording &&
+                !exporting &&
+                recordingReady
 
-    timelineSeekBar.isEnabled =
-        !audioRecorder.isRecording &&
-        !exporting &&
-        timelineDurationMs > 0
-}
+            timelineSeekBar.isEnabled =
+                !audioRecorder.isRecording &&
+                !exporting &&
+                timelineDurationMs > 0
+        }
     }
 
-private fun refreshTimelineDuration() {
-    val originalDuration =
-        if (originalReady) {
-            originalPlayer?.duration ?: 0
-        } else {
-            0
+    private fun refreshTimelineDuration() {
+        val originalDuration =
+            if (originalReady) {
+                originalPlayer?.duration ?: 0
+            } else {
+                0
+            }
+
+        val recordingDuration =
+            if (recordingReady) {
+                recordingPlayer?.duration ?: 0
+            } else {
+                0
+            }
+
+        timelineDurationMs = maxOf(
+            originalDuration,
+            if (recordingReady) {
+                recordingOffsetMs + recordingDuration
+            } else {
+                0
+            }
+        ).coerceAtLeast(0)
+
+        playheadMs = playheadMs.coerceIn(0, timelineDurationMs)
+
+        if (::timelineSeekBar.isInitialized) {
+            timelineSeekBar.max = (timelineDurationMs + 99) / 100
         }
 
-    val recordingDuration =
-        if (recordingReady) {
-            recordingPlayer?.duration ?: 0
-        } else {
-            0
-        }
-
-    timelineDurationMs = maxOf(
-        originalDuration,
-        if (recordingReady) {
-            recordingOffsetMs + recordingDuration
-        } else {
-            0
-        }
-    ).coerceAtLeast(0)
-
-    playheadMs = playheadMs.coerceIn(
-        0,
-        timelineDurationMs
-    )
-
-    if (::timelineSeekBar.isInitialized) {
-        timelineSeekBar.max =
-            (timelineDurationMs + 99) / 100
+        updateTimelineDisplay()
     }
 
-    updateTimelineDisplay()
-}
+    private fun formatTime(milliseconds: Int): String {
+        val totalSeconds = milliseconds / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
 
-private fun formatTime(milliseconds: Int): String {
-    val totalSeconds = milliseconds / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-
-    return String.format(
-        Locale.US,
-        "%d:%02d",
-        minutes,
-        seconds
-    )
-}
-
-private fun updateTimelineDisplay() {
-    if (!::timelineSeekBar.isInitialized) return
-
-    timelineSeekBar.progress = playheadMs / 100
-
-    timelineText.text = getString(
-        R.string.timeline_position_format,
-        formatTime(playheadMs),
-        formatTime(timelineDurationMs)
-    )
-
-    offsetText.text = getString(
-        R.string.timeline_offset_format,
-        recordingOffsetMs / 1000.0
-    )
-}
-
-private fun seekPreviewTo(positionMs: Int) {
-    if (audioRecorder.isRecording || exporting) return
-
-    timelineHandler.removeCallbacks(timelineTicker)
-
-    if (isPlaying) {
-        pausePlayback()
+        return String.format(
+            Locale.US,
+            "%d:%02d",
+            minutes,
+            seconds
+        )
     }
 
-    playheadMs = positionMs.coerceIn(
-        0,
-        timelineDurationMs
-    )
+    private fun updateTimelineDisplay() {
+        if (!::timelineSeekBar.isInitialized) return
 
-    isPaused = true
+        timelineSeekBar.progress = playheadMs / 100
 
-    try {
-        originalPlayer?.takeIf { originalReady }?.let {
-            it.seekTo(
-                playheadMs.coerceAtMost(it.duration).toLong(),
-                MediaPlayer.SEEK_CLOSEST
-            )
-        }
+        timelineText.text = getString(
+            R.string.timeline_position_format,
+            formatTime(playheadMs),
+            formatTime(timelineDurationMs)
+        )
 
-        recordingPlayer?.takeIf { recordingReady }?.let {
-            val positionInRecording =
-                (playheadMs - recordingOffsetMs)
-                    .coerceIn(0, it.duration)
-
-            it.seekTo(
-                positionInRecording.toLong(),
-                MediaPlayer.SEEK_CLOSEST
-            )
-        }
-    } catch (_: IllegalStateException) {
-        playbackStatus.setText(R.string.status_error)
+        offsetText.text = getString(
+            R.string.timeline_offset_format,
+            recordingOffsetMs / 1000.0
+        )
     }
 
-    updateTimelineDisplay()
-}
+    private fun seekPreviewTo(positionMs: Int) {
+        if (audioRecorder.isRecording || exporting) return
+
+        timelineHandler.removeCallbacks(timelineTicker)
+
+        if (isPlaying) {
+            pausePlayback()
+        }
+
+        playheadMs = positionMs.coerceIn(0, timelineDurationMs)
+        isPaused = true
+
+        try {
+            originalPlayer?.takeIf { originalReady }?.let {
+                it.seekTo(
+                    playheadMs.coerceAtMost(it.duration).toLong(),
+                    MediaPlayer.SEEK_CLOSEST
+                )
+            }
+
+            recordingPlayer?.takeIf { recordingReady }?.let {
+                val positionInRecording =
+                    (playheadMs - recordingOffsetMs).coerceIn(0, it.duration)
+
+                it.seekTo(
+                    positionInRecording.toLong(),
+                    MediaPlayer.SEEK_CLOSEST
+                )
+            }
+        } catch (_: IllegalStateException) {
+            playbackStatus.setText(R.string.status_error)
+        }
+
+        updateTimelineDisplay()
+    }
 
     // ACTIVITY LIFECYCLE
 
@@ -1119,22 +1154,22 @@ private fun seekPreviewTo(positionMs: Int) {
         if (audioRecorder.isRecording) {
             val file = audioRecorder.stop()
 
+            if (file != null) {
+                saveNewRecording(file)
+                recordingFile = file
 
-if (file != null) {
-    recordingFile = file
-
-    try {
-        projectStore.update(
-            projectId,
-            "Microphone recording saved"
-        ) {
-            it.copy(recordingPath = file.absolutePath)
-        }
-    } catch (_: Exception) {
-        // The recording remains in app-private storage,
-        // but the project metadata could not be saved.
-    }
-}
+                try {
+                    projectStore.update(
+                        projectId,
+                        "Microphone recording saved"
+                    ) {
+                        it.copy(recordingPath = file.absolutePath)
+                    }
+                } catch (_: Exception) {
+                    // The recording remains in app-private storage,
+                    // but the project metadata could not be saved.
+                }
+            }
 
             updateTrackLabels()
         }
@@ -1145,17 +1180,11 @@ if (file != null) {
 
     override fun onSaveInstanceState(outState: Bundle) {
         originalUri?.let {
-            outState.putString(
-                STATE_AUDIO_URI,
-                it.toString()
-            )
+            outState.putString(STATE_AUDIO_URI, it.toString())
         }
 
         recordingFile?.let {
-            outState.putString(
-                STATE_RECORDING_PATH,
-                it.absolutePath
-            )
+            outState.putString(STATE_RECORDING_PATH, it.absolutePath)
         }
 
         super.onSaveInstanceState(outState)
