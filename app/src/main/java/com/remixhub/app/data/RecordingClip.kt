@@ -4,5 +4,7 @@ data class RecordingClip(
     val id: String,
     val filePath: String,
     val offsetMs: Int = 0,
-    val isMuted: Boolean = false
+    val isMuted: Boolean = false,
+    val name: String = "Recording",
+    val volume: Int = 100
 )
