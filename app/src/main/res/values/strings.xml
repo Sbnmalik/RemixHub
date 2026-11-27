@@ -58,4 +58,18 @@
     <string name="recording_clip_selected">Selected: Recording %1$d</string>
     <string name="recording_clips_empty">No recordings yet</string>
     <string name="clip_save_error">Unable to save recording clip.</string>
+
+
+    <string name="clip_volume">Clip Volume</string>
+    <string name="clip_volume_percent">Volume: %1$d%%</string>
+    <string name="clip_rename">Rename</string>
+    <string name="clip_delete">Delete</string>
+    <string name="clip_delete_title">Delete recording?</string>
+    <string name="clip_delete_message">Remove this recording from the project? This cannot be undone.</string>
+    <string name="clip_cancel">Cancel</string>
+    <string name="clip_save">Save</string>
+    <string name="clip_name_empty">Enter a recording name.</string>
+    <string name="clip_name_changed">Recording renamed.</string>
+    <string name="clip_deleted">Recording deleted.</string>
+    <string name="clip_edit_error">Unable to save recording changes.</string>
 </resources>
