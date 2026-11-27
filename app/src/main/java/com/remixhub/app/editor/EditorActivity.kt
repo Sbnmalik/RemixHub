@@ -302,6 +302,14 @@ class EditorActivity : Activity() {
         }
     }
 
+    private fun effectiveClipGain(
+        clipVolume: Int
+    ): Float {
+            val master = recordingVolume.progress / 100f
+            val clip = clipVolume.coerceIn(0, 100) / 100f
+        return master * clip
+    }
+
     private fun saveNewRecording(file: File): Boolean {
         val clip = RecordingClip(
             id = UUID.randomUUID().toString(),
