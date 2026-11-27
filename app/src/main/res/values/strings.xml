@@ -51,4 +51,11 @@
     <string name="timeline_position_default">Position: 0:00 / 0:00</string>
     <string name="timeline_offset_format">Recording starts at %1$.1fs</string>
     <string name="timeline_position_format">Position: %1$s / %2$s</string>
+
+
+    <string name="recording_clips_title">Recording Clips</string>
+    <string name="recording_clip_format">Recording %1$d</string>
+    <string name="recording_clip_selected">Selected: Recording %1$d</string>
+    <string name="recording_clips_empty">No recordings yet</string>
+    <string name="clip_save_error">Unable to save recording clip.</string>
 </resources>
