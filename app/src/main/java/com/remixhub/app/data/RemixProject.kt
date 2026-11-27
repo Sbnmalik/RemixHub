@@ -10,5 +10,7 @@ data class RemixProject(
     val originalVolume: Int = 100,
     val recordingVolume: Int = 100,
     val recordingOffsetMs: Int = 0,
+    val clips: List<RecordingClip> = emptyList(),
+    val activeClipId: String? = null,
     val history: List<String> = emptyList()
 )
